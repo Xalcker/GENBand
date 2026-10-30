@@ -236,6 +236,36 @@ eso se generan los 4 charts de batería con el generador de NESBand (`drums.py`)
 **Lo que aún no suena:** el **DAC** (los samples de batería de muchos juegos). Alimentarlo necesita un driver
 en el Z80, que es la siguiente etapa; mientras, esas canciones suenan sin su batería sampleada.
 
+### Editor de charts
+
+```bash
+uv run genband edit-chart            # abre en blanco: eliges la canción desde el menú Archivo
+uv run genband edit-chart tormenta   # o directo una canción
+```
+
+Es el editor de NESBand, con los canales de la Genesis: una página local en el navegador (HTML + Canvas, sin
+dependencias; el servidor solo escucha en `127.0.0.1`).
+
+- **Menú Archivo:** *Nueva canción…* importa un VGM (los de `songs_src/` y `audio/`, o escribes otra ruta) igual
+  que `import-song`; *Abrir…* lista las canciones de `src/songs/`; *Guardar*, *Exportar song.c* y *Cerrar canción*.
+- **Canales de la canción:** las notas de FM 1-6, PSG 1-3 y el ruido sobre la línea de tiempo, con la rejilla de
+  tiempos, el cuadro en que arranca la música y el fin. Rueda para el zoom, arrastra para recorrer.
+- **Chart:** el de un instrumento y dificultad con sus 5 carriles (←/X, ↓/Y, →/Z, B, C), acordes, colas y frases
+  estelares. Las notas con problemas salen en rojo y en la lista de avisos (las mismas reglas que `check_playable`).
+- **Editar:** clic en un carril vacío agrega una nota, clic la selecciona y arrastrarla la mueve, `Mayús`+clic la
+  quita; teclas `←` `→` carril, `↑` `↓` tiempo, `Supr` borra, `J` acorde con la siguiente, `T` cola, `S` estelar,
+  `P` platillo (batería), `Ctrl+Z`/`Ctrl+Y`.
+- **Guardar** (`Ctrl+S`) escribe solo la diferencia con el chart automático en `src/songs/<nombre>/edits.json`.
+  `import-song` y `reimport` generan el chart automático y luego le aplican las ediciones, así que mejorar el
+  generador no las pierde (si una ya no encuentra su nota, se avisa y se omite). **Exportar song.c** guarda y
+  vuelve a importar la canción, con lo que su `song.c` sale con los charts editados.
+- **Batería:** la tabla de abajo da a cada grupo de golpes su papel (bombo, tarola, toms, platillo) y rehace al
+  momento los charts de batería; se guarda en `drums.json`.
+
+`--no-open` no abre el navegador, `--port` cambia el puerto y `--html ruta.html` escribe una página de solo
+lectura. **Aún no tiene "Escuchar":** tocar la canción en el navegador necesita un emulador del YM2612 y del PSG
+en JavaScript (pendiente).
+
 ## Canciones originales
 
 Se componen en Python con `audio/compose.py`, con la misma notación de NESBand (16 filas por compás,
@@ -295,7 +325,8 @@ todas las notas y siga si un jugador cae, y que el audio suene. El bot toca con 
 `build/test-<nombre>/` las capturas, el audio (`audio.wav`) y el registro. `tests/run_tests.sh '*-nada'`
 corre solo los casos que coinciden; `--no-build` usa la ROM que ya está.
 
-`pytest` prueba el lector y escritor de VGM, la extracción de notas y el generador de charts.
+`pytest` prueba el lector y escritor de VGM, la extracción de notas, el generador de charts y el editor (las
+ediciones y guardar y exportar a través de su servidor, sobre una copia de la canción).
 
 ## Cómo está hecho
 
@@ -316,16 +347,15 @@ corre solo los casos que coinciden; `--no-build` usa la ROM que ya está.
 
 ## Hoja de ruta
 
-Lo que ya tiene NESBand y falta aquí, más o menos en orden:
+GENBand ya tiene lo que tiene NESBand (1 y 2 jugadores, batería, opciones y práctica, récords, escenario,
+release y editor de charts). Lo que falta, más o menos en orden:
 
-1. Driver de sonido en el Z80 para el **DAC** (batería sampleada de los VGM) y para que la música no dependa
-   del 68000.
-3. **Batería** como instrumento (con el editor de asignación de golpes).
-4. **Récords** en la SRAM del cartucho, con iniciales.
-5. **Opciones** (espejo, velocidad, caída de notas, práctica).
-6. Generar los gráficos al compilar (en Python) en vez de al arrancar: hoy el arranque tarda ~2 s.
-7. **Editor de charts** en el navegador, con un reproductor del YM2612.
-8. Probar en hardware (flash cart y MiSTer).
+1. **Escuchar en el editor de charts:** un reproductor del YM2612 y del PSG en JavaScript.
+2. Driver de sonido en el Z80 para el **DAC** (la batería sampleada de los VGM de otros juegos) y para que la
+   música no dependa del 68000.
+3. Generar los gráficos al compilar (en Python) en vez de al arrancar: hoy el arranque tarda ~2 s.
+4. Mejor arte del escenario (los haces de luz y el público son sencillos) y público también con 2 jugadores.
+5. Probar en hardware (flash cart y MiSTer).
 
 ## Licencia
 

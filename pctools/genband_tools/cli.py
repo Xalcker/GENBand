@@ -6,6 +6,7 @@
     uv run genband list-songs
     uv run genband reimport                      (todas, con las mismas opciones, tras mejorar el generador)
     uv run genband build-audio                   (música del título, de audio/titulo.py)
+    uv run genband edit-chart [tormenta]         (el editor de charts en el navegador)
 
 import-song genera src/songs/<nombre>/song.c: el flujo de la música (ver vgm.frame_stream), un chart
 por instrumento y dificultad y la ficha de la canción que lee el juego (título, tempo, fin, canales).
@@ -21,10 +22,24 @@ import subprocess
 import sys
 import unicodedata
 import zlib
+from dataclasses import dataclass
 from pathlib import Path
 
 from . import vgm
-from .chart import DIFFICULTIES, DRUM_BLOCKED_PAIRS, build_chart, chart_buttons, chart_to_c, check_playable, estimate_beat, merge_attacks
+from .chart import (
+    BLOCKED_PAIRS,
+    DIFFICULTIES,
+    DRUM_BLOCKED_PAIRS,
+    BeatGrid,
+    ChartNote,
+    build_chart,
+    chart_buttons,
+    chart_to_c,
+    check_playable,
+    estimate_beat,
+    merge_attacks,
+)
+from .chartedit import apply_edits, load_edits
 from .drums import DRUMS_FILE, build_drum_chart, drum_groups, drum_hits, load_drums, save_drums, suggest_assignment
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -124,8 +139,30 @@ def c_string(text: str) -> str:
     return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
-def import_song(opts: dict) -> None:
-    """Importa una canción con las opciones de import.json (ver main)."""
+@dataclass
+class SongData:
+    """Lo que sale de leer el VGM de una canción con sus opciones (lo usan import-song y el editor)."""
+
+    opts: dict
+    name: str
+    title: str
+    game: str
+    stream: bytes
+    stream_frames: int
+    notes: dict[int, list[vgm.Note]]   # por canal (ver vgm.CHANNEL_NAMES)
+    assign: dict[str, list[int]]       # instrumento -> canales
+    drums: list[int]                   # canales de la batería
+    grid: BeatGrid
+
+    @property
+    def folder(self) -> Path:
+        return SONGS_DIR / self.name
+
+    def channel_notes(self, chs: list[int]) -> list[vgm.Note]:
+        return sorted((n for ch in chs for n in self.notes.get(ch, [])), key=lambda n: n.frame)
+
+
+def load_song(opts: dict) -> SongData:
     name = opts["name"]
     if not re.fullmatch(r"[a-z][a-z0-9_]*", name):
         raise SystemExit(f"nombre inválido: {name} (minúsculas, números y _; empieza con letra)")
@@ -156,77 +193,93 @@ def import_song(opts: dict) -> None:
     drums = parse_channels(opts.get(DRUMS)) or drum_channels(notes, used)
     onsets = [n.frame for ch, ns in notes.items() if ch in used or ch == vgm.NOISE for n in ns]
     grid = estimate_beat(onsets, opts.get("beat_frames"))
+    return SongData(opts, name, title, game, stream, stream_frames, notes, assign, drums, grid)
 
-    def channel_notes(chs: list[int]) -> list[vgm.Note]:
-        return sorted((n for ch in chs for n in notes.get(ch, [])), key=lambda n: n.frame)
 
+def drum_assignment(sd: SongData, override: dict | None = None) -> tuple[dict | None, bool]:
+    """La asignación de papeles de la batería: la que se pide, la de drums.json o, si no hay, la sugerida.
+    Devuelve (asignación, ¿es solo una sugerencia sin guardar?)."""
+    if not sd.drums:
+        return None, False
+    if override is not None:
+        return override, False
+    saved = load_drums(sd.folder)
+    if saved is not None:
+        return saved, False
+    return suggest_assignment(drum_groups(sd.notes, sd.drums)), True
+
+
+def auto_charts(sd: SongData, assignment: dict | None = None) -> dict[str, list[ChartNote]]:
+    """Los charts que genera el importador, sin ediciones, por clave "instrumento/dificultad"."""
+    charts: dict[str, list[ChartNote]] = {}
+    for inst, role in INSTRUMENTS:
+        chs = sd.assign.get(inst)
+        if not chs:
+            continue
+        partner_chs = sd.assign.get(PARTNER.get(inst, ""), [])
+        mine = sd.channel_notes(chs)
+        partner = sd.channel_notes(partner_chs) if partner_chs else []
+        for diff in DIFFICULTIES:
+            charts[f"{inst}/{diff.name}"] = build_chart(mine, diff, sd.grid, LEAD_IN, role, partner)
+    if assignment is None:
+        assignment = drum_assignment(sd)[0]
+    hits = drum_hits(sd.notes, sd.drums, assignment) if assignment else []
+    if hits:
+        for diff in DIFFICULTIES:
+            charts[f"{DRUMS}/{diff.name}"] = build_drum_chart(hits, diff.name, sd.grid, LEAD_IN)
+    return charts
+
+
+def edited_charts(sd: SongData, auto: dict[str, list[ChartNote]], edits: dict | None = None) -> tuple[dict, list[str]]:
+    """Los charts automáticos con las ediciones de edits.json encima, y los avisos de lo que no se pudo aplicar."""
+    edits = load_edits(sd.folder) if edits is None else edits
+    warnings: list[str] = []
+    result = {}
+    for key, chart in auto.items():
+        warn = lambda text, key=key: warnings.append(f"{key}: {text}")  # noqa: E731
+        result[key] = apply_edits(chart, edits[key], warn) if edits.get(key) else chart
+    return result, warnings
+
+
+def write_song(sd: SongData, charts: dict[str, list[ChartNote]]) -> list[str]:
+    """Escribe src/songs/<nombre>/song.c con los charts (ya con ediciones). Devuelve el reporte por instrumento."""
     out = [
         "// Generado por genband import-song: no editar a mano (las opciones están en import.json)",
-        f"// TITULO: {title}",
+        f"// TITULO: {sd.title}",
         '#include "song.h"',
         "",
-        c_bytes("stream", stream),
+        c_bytes("stream", sd.stream),
     ]
-    charts_c, buttons_c, mask_c = [], [], []
-    report = []
-    for inst, role in INSTRUMENTS:
-        chs = assign.get(inst)
-        if not chs:
+    charts_c, buttons_c, mask_c, report = [], [], [], []
+    for inst in [i for i, _ in INSTRUMENTS] + [DRUMS]:
+        keys = [f"{inst}/{d.name}" for d in DIFFICULTIES]
+        if not all(k in charts for k in keys):
             charts_c.append("{ " + ", ".join(["NULL"] * len(DIFFICULTIES)) + " }")
             buttons_c.append("{ " + ", ".join(["0"] * len(DIFFICULTIES)) + " }")
             mask_c.append("0")
             continue
-        partner_chs = assign.get(PARTNER.get(inst, ""), [])
-        mine = channel_notes(chs)
-        partner = channel_notes(partner_chs) if partner_chs else []
         labels, counts = [], []
-        for diff in DIFFICULTIES:
-            chart = build_chart(mine, diff, grid, LEAD_IN, role, partner)
-            check_playable(chart)
-            label = f"{inst}_{diff.name}"
+        for key in keys:
+            chart = charts[key]
+            check_playable(chart, DRUM_BLOCKED_PAIRS if inst == DRUMS else BLOCKED_PAIRS)
+            label = key.replace("/", "_")
             out.append(chart_to_c(label, chart))
             labels.append(label)
             counts.append(str(chart_buttons(chart)))
+        chs = sd.drums if inst == DRUMS else sd.assign[inst]
         charts_c.append("{ " + ", ".join(labels) + " }")
         buttons_c.append("{ " + ", ".join(counts) + " }")
         mask_c.append(f"0x{sum(1 << ch for ch in chs):04X}")
         report.append(f"  {inst}: {', '.join(vgm.CHANNEL_NAMES[c] for c in chs)} ({', '.join(counts)} notas)")
-
-    # Batería: los golpes de sus canales, con el papel de cada grupo (drums.json; si falta, la sugerencia)
-    folder = SONGS_DIR / name
-    folder.mkdir(parents=True, exist_ok=True)
-    assignment = load_drums(folder) if drums else None
-    if drums and assignment is None:
-        assignment = suggest_assignment(drum_groups(notes, drums))
-        save_drums(folder, assignment)
-    hits = drum_hits(notes, drums, assignment) if drums else []
-    if hits:
-        labels, counts = [], []
-        for diff in DIFFICULTIES:
-            chart = build_drum_chart(hits, diff.name, grid, LEAD_IN)
-            check_playable(chart, DRUM_BLOCKED_PAIRS)
-            label = f"{DRUMS}_{diff.name}"
-            out.append(chart_to_c(label, chart))
-            labels.append(label)
-            counts.append(str(chart_buttons(chart)))
-        charts_c.append("{ " + ", ".join(labels) + " }")
-        buttons_c.append("{ " + ", ".join(counts) + " }")
-        mask_c.append(f"0x{sum(1 << ch for ch in drums):04X}")
-        report.append(f"  {DRUMS}: {', '.join(vgm.CHANNEL_NAMES[c] for c in drums)} ({', '.join(counts)} notas)")
-    else:
-        charts_c.append("{ " + ", ".join(["NULL"] * len(DIFFICULTIES)) + " }")
-        buttons_c.append("{ " + ", ".join(["0"] * len(DIFFICULTIES)) + " }")
-        mask_c.append("0")
-
     out.append(
-        f"""const Song song_{name} = {{
-    .title = {c_string(title)},
-    .game = {c_string(game)},
+        f"""const Song song_{sd.name} = {{
+    .title = {c_string(sd.title)},
+    .game = {c_string(sd.game)},
     .stream = stream,
-    .end_frame = {LEAD_IN + stream_frames},
-    .beat_frames = {grid.frames_per_beat},
-    .first_beat = {LEAD_IN + grid.first_beat},
-    .hash = 0x{song_hash(title, game):04X},
+    .end_frame = {LEAD_IN + sd.stream_frames},
+    .beat_frames = {sd.grid.frames_per_beat},
+    .first_beat = {LEAD_IN + sd.grid.first_beat},
+    .hash = 0x{song_hash(sd.title, sd.game):04X},
     .channels = {{ {", ".join(mask_c)} }},
     .charts = {{
         {(","+chr(10)+"        ").join(charts_c)}
@@ -237,19 +290,35 @@ def import_song(opts: dict) -> None:
 }};
 """
     )
-    (folder / "song.c").write_text("\n".join(out), encoding="utf-8", newline="\n")
-    (folder / "import.json").write_text(json.dumps(opts, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    sd.folder.mkdir(parents=True, exist_ok=True)
+    (sd.folder / "song.c").write_text("\n".join(out), encoding="utf-8", newline="\n")
+    (sd.folder / "import.json").write_text(json.dumps(sd.opts, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    return report
 
-    work = WORK_DIR / name
+
+def import_song(opts: dict) -> None:
+    """Importa una canción con las opciones de import.json (ver main): genera sus charts, les aplica las
+    ediciones de edits.json (las del editor) y escribe song.c."""
+    sd = load_song(opts)
+    sd.folder.mkdir(parents=True, exist_ok=True)
+    assignment, suggested = drum_assignment(sd)
+    if suggested:
+        save_drums(sd.folder, assignment)       # la sugerencia queda guardada, para corregirla a mano
+    charts, warnings = edited_charts(sd, auto_charts(sd, assignment))
+    report = write_song(sd, charts)
+
+    work = WORK_DIR / sd.name
     work.mkdir(parents=True, exist_ok=True)
     (work / "notes.json").write_text(
-        json.dumps({vgm.CHANNEL_NAMES[ch]: [[n.frame, n.pitch, n.duration] for n in ns] for ch, ns in notes.items()}),
+        json.dumps({vgm.CHANNEL_NAMES[ch]: [[n.frame, n.pitch, n.duration] for n in ns] for ch, ns in sd.notes.items()}),
         encoding="utf-8",
     )
-    bpm = 3600 / grid.frames_per_beat
-    print(f"{folder / 'song.c'}: {title} / {game}")
-    print(f"  {stream_frames / 60:.0f} s, {len(stream)} bytes de música, tempo {bpm:.0f} BPM ({grid.frames_per_beat} cuadros)")
+    bpm = 3600 / sd.grid.frames_per_beat
+    print(f"{sd.folder / 'song.c'}: {sd.title} / {sd.game}")
+    print(f"  {sd.stream_frames / 60:.0f} s, {len(sd.stream)} bytes de música, tempo {bpm:.0f} BPM ({sd.grid.frames_per_beat} cuadros)")
     print("\n".join(report) if report else "  (ningún instrumento: revisa los canales con `genband channels`)")
+    for warning in warnings:
+        print(f"  aviso: {warning}")
 
 
 def cmd_import(args: argparse.Namespace) -> None:
@@ -413,6 +482,17 @@ def cmd_build_font(args: argparse.Namespace) -> None:
     print(f"src/font_data.c: {len(glyphs)} caracteres")
 
 
+def cmd_edit_chart(args: argparse.Namespace) -> None:
+    from . import editor  # (solo cuando se pide: editor importa este módulo)
+
+    if args.html:
+        if not args.name:
+            raise SystemExit("--html necesita el nombre de la canción")
+        editor.write_html(args.name, Path(args.html))
+    else:
+        editor.serve(args.name, args.port, not args.no_open)
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="genband", description="Herramientas de PC para GENBand")
     sub = parser.add_subparsers(required=True)
@@ -440,6 +520,13 @@ def main(argv: list[str] | None = None) -> None:
 
     p = sub.add_parser("list-songs", help="lista las canciones de src/songs/")
     p.set_defaults(func=cmd_list)
+
+    p = sub.add_parser("edit-chart", help="abre el editor de charts en el navegador")
+    p.add_argument("name", nargs="?", help="la canción de src/songs/ (si no, se elige desde el menú Archivo)")
+    p.add_argument("--port", type=int, default=8765)
+    p.add_argument("--no-open", action="store_true", help="no abrir el navegador")
+    p.add_argument("--html", help="escribir una página de solo lectura en esta ruta, en vez de servir")
+    p.set_defaults(func=cmd_edit_chart)
 
     p = sub.add_parser("build-font", help="convierte la fuente de NESBand (Bongo-8 Mono) a src/font_data.c")
     p.add_argument("source", nargs="?", default=str(ROOT.parent / "NESBand" / "src" / "font.s"))
