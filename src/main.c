@@ -14,13 +14,21 @@ const char *const difficulty_names[NUM_DIFFICULTIES] = { "FACIL", "MEDIO", "DIFI
 Screen current_screen;          // la pantalla que corre (la leen las pruebas)
 u16 joy_held;
 u16 joy_pressed;
+u16 pad_held[2];
+u16 pad_pressed[2];
 
 void input_update(void)
 {
-    // Los dos controles cuentan (como en NESBand, Start o los menús funcionan desde cualquiera)
-    const u16 now = JOY_readJoypad(JOY_1) | JOY_readJoypad(JOY_2);
-    joy_pressed = now & ~joy_held;
-    joy_held = now;
+    // Cada control por separado (2 jugadores) y los dos juntos (como en NESBand, Start o los menús funcionan
+    // desde cualquiera)
+    for (u16 i = 0; i < 2; i++)
+    {
+        const u16 now = JOY_readJoypad(i ? JOY_2 : JOY_1);
+        pad_pressed[i] = now & ~pad_held[i];
+        pad_held[i] = now;
+    }
+    joy_held = pad_held[0] | pad_held[1];
+    joy_pressed = pad_pressed[0] | pad_pressed[1];
 }
 
 void wait_frame(void)

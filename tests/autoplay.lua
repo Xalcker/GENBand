@@ -6,6 +6,8 @@
 --   GENBAND_SYM    símbolos de la ROM (build/genband.sym, salida de nm)
 --   GENBAND_OUT    carpeta donde van resultado.txt y las capturas
 --   GENBAND_SONG, GENBAND_INSTR, GENBAND_DIFF   lo que se elige en el menú (números, desde 0)
+--   GENBAND_PLAYERS   0 = 1 jugador, 1 = 2 jugadores VS, 2 = 2 jugadores Co-Op
+--   GENBAND_INSTR2, GENBAND_DIFF2, GENBAND_MODE2   lo del jugador 2 (que toca con el control 2)
 --   GENBAND_OPTS   opciones (pantalla de A en el menú), como "espejo=1 velocidad=1 practica=1 inicio=0"
 --                  (los valores son el número de la opción, desde 0)
 --   GENBAND_MODE   perfecto (acierta todo), nada (no toca: debe perder), mitad (falla una de cada dos),
@@ -21,6 +23,10 @@ local want_song = tonumber(os.getenv("GENBAND_SONG") or "0")
 local want_instr = tonumber(os.getenv("GENBAND_INSTR") or "0")
 local want_diff = tonumber(os.getenv("GENBAND_DIFF") or "3")
 local mode = os.getenv("GENBAND_MODE") or "perfecto"
+local want_players = tonumber(os.getenv("GENBAND_PLAYERS") or "0")
+local want_instr2 = tonumber(os.getenv("GENBAND_INSTR2") or "0")
+local want_diff2 = tonumber(os.getenv("GENBAND_DIFF2") or "0")
+local mode2 = os.getenv("GENBAND_MODE2") or "perfecto"
 local opts = {}
 for k, v in (os.getenv("GENBAND_OPTS") or ""):gmatch("(%w+)=(%d+)") do opts[k] = tonumber(v) end
 local OPTION_ORDER = { "espejo", "velocidad", "caida", "practica", "inicio", "efecto" }
@@ -35,7 +41,7 @@ for line in io.lines(sym_path) do
     local addr, _, name = line:match("^(%x+) (%a) (%S+)$")
     if addr then sym[name] = tonumber(addr, 16) & 0xFFFFFF end
 end
-for _, name in ipairs({ "current_screen", "sel", "result", "now", "gems", "gem_head", "gem_tail" }) do
+for _, name in ipairs({ "current_screen", "sel", "result", "now", "players", "player_size" }) do
     assert(sym[name], "falta el símbolo " .. name .. " en " .. sym_path)
 end
 
@@ -47,7 +53,22 @@ local field = {
     start = pad.fields["P1 Start"],
 }
 -- Carriles con el control de 3 botones: ←, ↓, →, B, C
-local lane_field = { field.left, field.down, field.right, field.b, field.c }
+local pad2 = manager.machine.ioport.ports[":ctrl2:mdpad:PAD"]
+local field2 = {
+    up = pad2.fields["P2 Up"], down = pad2.fields["P2 Down"], left = pad2.fields["P2 Left"],
+    right = pad2.fields["P2 Right"], a = pad2.fields["P2 A"], b = pad2.fields["P2 B"], c = pad2.fields["P2 C"],
+    start = pad2.fields["P2 Start"],
+}
+local PLAYER_SIZE = mem:read_u16(sym.player_size)
+local GEMS_BYTES = 64 * 8 -- Player.gems; detrás van gem_head y gem_tail
+-- Cada jugador: su modo, sus carriles (control 1 o 2) y lo que tiene presionado
+local bots = {
+    { mode = mode, lane_field = { field.left, field.down, field.right, field.b, field.c },
+      release = {}, gem = {}, skip = false },
+    { mode = mode2, lane_field = { field2.left, field2.down, field2.right, field2.b, field2.c },
+      release = {}, gem = {}, skip = false },
+}
+local lane_field = bots[1].lane_field
 
 local function screen() return mem:read_u32(sym.current_screen) end
 
@@ -70,14 +91,20 @@ local function menu_plan()
     local song = mem:read_u16(sym.sel)
     local instr = mem:read_u16(sym.sel + 2)
     local diff = mem:read_u16(sym.sel + 4)
-    local no_fail = mem:read_u8(sym.sel + 6)
+    local no_fail = mem:read_u8(sym.sel + 12)
+    local players_mode = mem:read_u16(sym.sel + 6)
     for _ = 1, (want_song - song) % 64 do tap(field.right) end
+    tap(field.down)
+    for _ = 1, (want_players - players_mode) % 3 do tap(field.right) end
     tap(field.down)
     for _ = 1, (want_instr - instr) % 4 do tap(field.right) end
     tap(field.down)
     for _ = 1, (want_diff - diff) % 4 do tap(field.right) end
     tap(field.down)
     if (mode == "sinfallo") ~= (no_fail ~= 0) then tap(field.right) end
+    -- El jugador 2, con su control: se calcula cuando llega su turno (cambiar el modo y el instrumento del 1
+    -- mueve el suyo)
+    if want_players > 0 then table.insert(queue, { plan2 = true }) end
     if next(opts) then
         -- Opciones: A las abre; cada renglón empieza en su valor normal (0)
         tap(field.a)
@@ -92,52 +119,54 @@ end
 
 local state = "titulo"
 local wait = 0
-local lane_release = { nil, nil, nil, nil, nil }
-local lane_gem = { nil, nil, nil, nil, nil } -- dirección de la nota sostenida cuyo fin aún no se leía
 local skip_toggle = false
 local shots = {}
 local missed_on_purpose = 0
 
 local function release_all()
     for _, f in pairs(field) do f:set_value(0) end
+    for _, f in pairs(field2) do f:set_value(0) end
 end
 
-local function play()
+local function play_player(i)
+    local bot = bots[i]
+    local base0 = sym.players + (i - 1) * PLAYER_SIZE
     local now = mem:read_u16(sym.now)
-    local head = mem:read_u16(sym.gem_head)
-    local tail = mem:read_u16(sym.gem_tail)
+    local head = mem:read_u16(base0 + GEMS_BYTES)
+    local tail = mem:read_u16(base0 + GEMS_BYTES + 2)
+    local fields = bot.lane_field
     -- Una cola larga: su fin se lee del chart cuando entra a la pantalla
     for lane = 1, 5 do
-        if lane_gem[lane] then
-            local gend = mem:read_u16(lane_gem[lane] + 2)
+        if bot.gem[lane] then
+            local gend = mem:read_u16(bot.gem[lane] + 2)
             if gend > 0 then
-                lane_release[lane] = gend
-                lane_gem[lane] = nil
+                bot.release[lane] = gend
+                bot.gem[lane] = nil
             end
         end
     end
     -- Soltar lo que ya toca soltar
     for lane = 1, 5 do
-        if lane_release[lane] and now >= lane_release[lane] then
-            lane_field[lane]:set_value(0)
-            lane_release[lane] = nil
+        if bot.release[lane] and now >= bot.release[lane] then
+            fields[lane]:set_value(0)
+            bot.release[lane] = nil
         end
     end
-    if mode == "nada" or mode == "sinfallo" then return end
+    if bot.mode == "nada" or bot.mode == "sinfallo" then return end
     -- Golpe al aire: el carril naranja, si no tiene una nota cerca
-    if mode == "aire" and now % 120 == 60 and not lane_release[5] then
+    if bot.mode == "aire" and now % 120 == 60 and not bot.release[5] then
         local free = true
         local m = head
         while m ~= tail do
-            local b = sym.gems + (m % GEM_SLOTS) * GEM_SIZE
+            local b = base0 + (m % GEM_SLOTS) * GEM_SIZE
             local f = mem:read_u16(b)
             if f > now + 10 then break end
             if mem:read_u8(b + 4) & 0x10 ~= 0 and f + 10 >= now then free = false end
             m = (m + 1) & 0xFFFF
         end
         if free then
-            lane_field[5]:set_value(1)
-            lane_release[5] = now + 2
+            fields[5]:set_value(1)
+            bot.release[5] = now + 2
             air_hits = (air_hits or 0) + 1
             if air_hits == 3 then shot_at = frame + 4 end
         end
@@ -145,7 +174,7 @@ local function play()
     -- Tocar las notas de este cuadro (el juego las juzga en el siguiente ciclo, con este mismo `now`)
     local n = head
     while n ~= tail do
-        local base = sym.gems + (n % GEM_SLOTS) * GEM_SIZE
+        local base = base0 + (n % GEM_SLOTS) * GEM_SIZE
         local gframe = mem:read_u16(base)
         if gframe > now + 2 then break end
         local gend = mem:read_u16(base + 2)
@@ -154,20 +183,20 @@ local function play()
         local done = mem:read_u8(base + 6) | mem:read_u8(base + 7)
         local open = mask & ~done
         if open ~= 0 and gframe == now then
-            skip_toggle = not skip_toggle
-            if mode == "mitad" and skip_toggle then
+            bot.skip = not bot.skip
+            if bot.mode == "mitad" and bot.skip then
                 missed_on_purpose = missed_on_purpose + 1
             else
                 for lane = 1, 5 do
-                    if open & (1 << (lane - 1)) ~= 0 and not lane_release[lane] then
-                        lane_field[lane]:set_value(1)
+                    if open & (1 << (lane - 1)) ~= 0 and not bot.release[lane] then
+                        fields[lane]:set_value(1)
                         local until_frame = now + 3
                         if flags & SUSTAIN ~= 0 and gend > 0 then until_frame = math.max(until_frame, gend) end
                         if flags & SUSTAIN ~= 0 and gend == 0 then
                             until_frame = now + 6000
-                            lane_gem[lane] = base
+                            bot.gem[lane] = base
                         end
-                        lane_release[lane] = until_frame
+                        bot.release[lane] = until_frame
                     end
                 end
             end
@@ -176,13 +205,17 @@ local function play()
     end
 end
 
+local function play()
+    play_player(1)
+    if want_players > 0 then play_player(2) end
+end
+
 -- El récord de la canción elegida en la tabla de la RAM (records.c): puntaje e iniciales, o nil
 local REC_SIZE_RAM = 12 -- sizeof(Record) en el 68000: id(2) clave(1) relleno(1) puntaje(4) iniciales(3) estrellas(1)
 local function find_record()
-    local hash = nil
     -- El hash de la canción: Song.hash de song_list[GENBAND_SONG]
     local song = mem:read_u32(sym.song_list + want_song * 4) & 0xFFFFFF
-    hash = mem:read_u16(song + 4 * 3 + 2 * 3)
+    local hash = mem:read_u16(song + 4 * 3 + 2 * 3)
     for i = 0, 249 do
         local b = sym.rec_table + i * REC_SIZE_RAM
         if mem:read_u8(b + 2) == want_instr * 4 + want_diff and mem:read_u16(b) == hash then
@@ -195,12 +228,22 @@ end
 
 local function write_result()
     local r = sym.result
+    local function pr(prefix, a)
+        return string.format("%spuntaje=%d\n%snotas=%d\n%stotal=%d\n%scombo_max=%d\n%sestrellas=%d\n%sfallo=%d\n%snuevo_record=%d\n",
+            prefix, mem:read_u32(a), prefix, mem:read_u16(a + 8), prefix, mem:read_u16(a + 10), prefix, mem:read_u16(a + 12),
+            prefix, mem:read_u16(a + 16), prefix, mem:read_u8(a + 18), prefix, mem:read_u8(a + 19))
+    end
     local f = io.open(out .. "/resultado.txt", "w")
     f:write(string.format("modo=%s\ncancion=%d\ninstrumento=%d\ndificultad=%d\n", mode, want_song, want_instr, want_diff))
     f:write(string.format("puntaje=%d\nperfecto=%d\nnotas=%d\ntotal=%d\ncombo_max=%d\nprecision=%d\nestrellas=%d\nfallo=%d\n",
         mem:read_u32(r), mem:read_u32(r + 4), mem:read_u16(r + 8), mem:read_u16(r + 10), mem:read_u16(r + 12),
         mem:read_u16(r + 14), mem:read_u16(r + 16), mem:read_u8(r + 18)))
     f:write(string.format("cuadros=%d\nnuevo_record=%d\n", frame, mem:read_u8(r + 19)))
+    if want_players > 0 then
+        f:write(pr("j2_", r + 20))
+        f:write(pr("banda_", r + 40))
+        f:write(string.format("ganador=%d\n", mem:read_u16(r + 60)))
+    end
     f:close()
 end
 
@@ -221,7 +264,7 @@ emu.register_frame_done(function()
 
     local s = screen()
     if frame % 600 == 0 then
-        note(string.format("pantalla %d, cuadro de la canción %d", s, mem:read_u16(sym.now)))
+        note(string.format("pantalla %d, cuadro de la canción %d, estado %s, cola %d", s, mem:read_u16(sym.now), state, #queue))
     end
     if state == "titulo" then
         if s == SCREEN_TITLE then
@@ -319,12 +362,14 @@ emu.register_frame_done(function()
             -- Iniciales: de las que traiga (AAA la primera vez) a BOT
             tap(field.start)
             table.insert(queue, { screen = SCREEN_INITIALS })
+            table.insert(queue, { shot = "iniciales" })
             for _ = 1, 1 do tap(field.up) end
             tap(field.right)
             for _ = 1, 14 do tap(field.up) end
             tap(field.right)
             for _ = 1, 19 do tap(field.up) end
             tap(field.start)
+            if want_players == 1 then tap(field2.start) end     -- VS: el jugador 2 deja las que traiga
             table.insert(queue, { screen = SCREEN_MENU })
             state = "iniciales"
             return
@@ -352,6 +397,31 @@ emu.register_frame_done(function()
 
     if #queue > 0 then
         local f = queue[1]
+        if type(f) == "table" and f.plan2 then
+            -- El jugador 2 elige con su control: aprieta hasta que la RAM tenga lo pedido
+            table.remove(queue, 1)
+            local steps = { { until_ = function() return mem:read_u16(sym.sel + 8) == want_instr2 end, press = field2.right } }
+            if want_players == 2 then
+                table.insert(steps, field2.down)
+                table.insert(steps, { until_ = function() return mem:read_u16(sym.sel + 10) == want_diff2 end, press = field2.right })
+            end
+            for k = #steps, 1, -1 do table.insert(queue, 1, steps[k]) end
+            return
+        end
+        if type(f) == "table" and f.shot then
+            table.remove(queue, 1)
+            snapshot(f.shot)
+            return
+        end
+        if type(f) == "table" and f.until_ then
+            if f.until_() then
+                table.remove(queue, 1)
+                return
+            end
+            f.press:set_value(1)
+            wait = 6
+            return
+        end
         if type(f) == "table" and f.screen then
             -- Esperar a que la pantalla esté lista (y unos cuadros más) antes de seguir
             if s == f.screen then

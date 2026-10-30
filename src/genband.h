@@ -29,10 +29,17 @@ Screen initials_run(void);
 extern Screen current_screen;
 
 // Lo que se eligió en el menú
+#define MODE_SOLO 0
+#define MODE_VS   1             // 2 jugadores: cada quien su partida
+#define MODE_COOP 2             // 2 jugadores: una banda (puntaje, combo y poder estelar compartidos)
+
 typedef struct {
     u16 song;
     u16 instrument;
     u16 difficulty;
+    u16 mode;                   // MODE_SOLO, MODE_VS o MODE_COOP
+    u16 instrument2;            // los del jugador 2
+    u16 difficulty2;
     bool no_fail;
     // Opciones (options.c): valen hasta que se cambian
     bool mirror;                // ESPEJO: los carriles al revés
@@ -59,7 +66,7 @@ static inline bool options_changed(void)
     return sel.mirror || sel.speed || sel.fall || sel.practice;
 }
 
-// Lo que deja la partida para la pantalla de resultados
+// Lo que deja la partida para la pantalla de resultados: lo de cada jugador y, en Co-Op, lo de la banda
 typedef struct {
     u32 score;
     u32 perfect;                // puntaje de acertar todo (sin poder estelar ni colas): de aquí salen las estrellas
@@ -70,7 +77,15 @@ typedef struct {
     u16 stars;
     bool failed;
     bool new_record;            // superó el récord (y la partida podía guardarlo)
+} PlayerResult;
+
+typedef struct {
+    PlayerResult p[2];          // (el del jugador 1 va primero: lo leen las pruebas)
+    PlayerResult band;          // Co-Op
+    u16 winner;                 // VS: 0 = empate, 1 o 2 = el que ganó
 } Result;
+
+#define BAND_RECORD 4           // "instrumento" de los récords de la banda (Co-Op): su clave es 16 + dificultad
 
 extern Result result;
 
@@ -89,6 +104,8 @@ extern char last_initials[3];
 
 extern u16 joy_held;            // botones presionados (de cualquiera de los dos controles)
 extern u16 joy_pressed;         // los que se presionaron en este cuadro
+extern u16 pad_held[2];         // lo mismo, de cada control
+extern u16 pad_pressed[2];
 void input_update(void);
 void wait_frame(void);          // espera la vblank y avanza la música si está sonando
 
@@ -172,7 +189,13 @@ extern u16 depth_scale[DEPTH_MAX - DEPTH_MIN + 1];  // y su escala (8.8)
 extern u16 trap_map[STRIP_ROW][40];         // el fondo en trapecio, listo para el plano B
 
 void perspective_init(void);
-void perspective_build(u16 lanes, u16 lane_w);  // el trapecio de la autopista con esos carriles
+#define MAX_PLAYERS 2
+typedef struct {
+    s16 cx;                     // centro (x) de la autopista
+    u16 lanes;                  // carriles (columnas): 5, o 4 en la batería
+    u16 lane_w;                 // ancho de cada uno en los aros (px)
+} Highway;
+void perspective_build(u16 count, const Highway *highways);    // el trapecio de 1 o 2 autopistas
 void perspective_start(void);               // enciende la interrupción de cada línea
 void perspective_stop(void);
 void perspective_set_scroll(u32 world_now); // el desplazamiento del siguiente cuadro

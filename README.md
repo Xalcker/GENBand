@@ -5,7 +5,7 @@ Un juego de ritmo estilo Guitar Hero / Rock Band para la Sega Genesis / Mega Dri
 el sonido FM del YM2612 y la música importada de archivos VGM.
 
 **Estado actual (v0.1.0, primera etapa):** título con su música, menú (canción, instrumento, dificultad,
-fallo), juego para **1 jugador** con pausa, notas sostenidas, frases de poder estelar, medidor de vida, y
+fallo), juego para **1 o 2 jugadores** (VS y Co-Op) con pausa, notas sostenidas, frases de poder estelar, medidor de vida, y
 pantalla de resultados con precisión, combo máximo y estrellas. Los charts se generan automáticamente para
 guitarra, teclado y bajo en 4 dificultades, y si fallas tu instrumento se calla hasta tu siguiente acierto,
 como en Rock Band, y la autopista va en perspectiva.
@@ -67,6 +67,22 @@ consola PAL irían más lento.
 
 **Menú:** ↑/↓ elige el renglón, ←/→ cambia el valor, Start juega, **A abre las opciones** y B regresa al
 título. Mientras eliges, suena la canción.
+
+**Dos jugadores:** en JUGADORES, ←/→ cambia entre `1 JUGADOR`, `2 JUGADORES VS` y `2 JUGADORES COOP`. El
+jugador 2 elige su instrumento y su dificultad con el **control 2** (su cursor es rojo; ↑/↓ cambia entre esos
+dos renglones). Las dos autopistas van en perspectiva, una en cada mitad de la pantalla, y comparten el scroll:
+van a la velocidad de la dificultad más alta de los dos.
+
+- **VS:** cada quien juega su partida. Los dos juegan la misma dificultad (la elige el jugador 1) y, de
+  entrada, el mismo instrumento (el 2 copia al 1, pero puede cambiarlo): un duelo sobre las mismas notas. Si
+  comparten instrumento, el canal solo se calla cuando los dos están fallando. Al final: `GANA J1 POR 0001230`
+  o `EMPATE`; si un jugador pierde (se le acaba la vida) la partida se corta y gana el otro, y esa partida no
+  graba récord. Cada quien tiene su récord y escribe sus iniciales con su control.
+- **Co-Op (banda):** el **puntaje, el combo y el poder estelar son de la banda**; la **vida es de cada quien**.
+  Si uno cae, su instrumento calla y el otro sigue; la banda pierde cuando caen los dos. El que sigue en pie
+  puede **revivir al caído con media barra de poder estelar** (A: si hay un compañero caído, revive en vez de
+  activar el poder). No pueden tocar el mismo instrumento. El **récord de banda** es aparte (por canción y la
+  dificultad más alta de los dos) y solo vale si los dos terminan en pie.
 
 **Opciones (A en el menú):** modificadores para rejugar una canción o aprender una parte difícil, como en
 NESBand. Se quedan hasta que las cambies; Start juega y B regresa al menú.
@@ -255,7 +271,9 @@ uv run pytest
 las notas de la RAM y anota los resultados. Comprueba que el juego perfecto acierte todo con 5 estrellas,
 que sin tocar se pierda, que SIN FALLO llegue al final, que los golpes al aire rompan el combo, que el espejo y
 las velocidades se puedan jugar perfecto, que la práctica se repita y que sus marcas cambien el bucle, que un récord se
-guarde con sus iniciales y siga ahí al volver a encender, y que el audio suene. El bot llega a las opciones como un jugador (`GENBAND_OPTS`). Cada caso deja en
+guarde con sus iniciales y siga ahí al volver a encender, que la batería se pueda jugar perfecto, que con
+2 jugadores VS haya empate con el mismo chart y que gane el otro si uno pierde, que en Co-Op la banda haga
+todas las notas y siga si un jugador cae, y que el audio suene. El bot toca con los dos controles. El bot llega a las opciones como un jugador (`GENBAND_OPTS`). Cada caso deja en
 `build/test-<nombre>/` las capturas, el audio (`audio.wav`) y el registro. `tests/run_tests.sh '*-nada'`
 corre solo los casos que coinciden; `--no-build` usa la ROM que ya está.
 
@@ -284,7 +302,6 @@ Lo que ya tiene NESBand y falta aquí, más o menos en orden:
 
 1. Driver de sonido en el Z80 para el **DAC** (batería sampleada de los VGM) y para que la música no dependa
    del 68000.
-2. **2 jugadores** (VS y Co-Op), con el segundo control.
 3. **Batería** como instrumento (con el editor de asignación de golpes).
 4. **Récords** en la SRAM del cartucho, con iniciales.
 5. **Opciones** (espejo, velocidad, caída de notas, práctica).

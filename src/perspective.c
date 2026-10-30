@@ -117,32 +117,35 @@ void perspective_stop(void)
 // en tiles: los que quedan de un solo color (todo escenario o todo autopista) no gastan VRAM
 static u8 pixels[8][320];
 
-static u16 trap_lanes, trap_lane_w;     // los carriles del trapecio que está en la VRAM
+static Highway trap_hw[MAX_PLAYERS];    // las autopistas del trapecio que está en la VRAM
+static u16 trap_count;
 
 static void draw_line(u8 *px, u16 line)
 {
-    if (line < HWY_TOP)
-    {
-        memset(px, TRAP_OUT, 320);
-        return;
-    }
+    memset(px, TRAP_OUT, 320);
+    if (line < HWY_TOP) return;
     const u16 scale = line_scale[line];
-    const s16 half = trap_lanes * trap_lane_w / 2;
-    s16 bx[NUM_LANES + 1];
-    for (u16 k = 0; k <= trap_lanes; k++)
-        bx[k] = HWY_CX + (((s32) (trap_lane_w * k - half) * scale + 128) >> 8);
-    const s16 last = bx[trap_lanes];
-    memset(px, TRAP_OUT, bx[0]);
-    memset(px + bx[0], 0, last - bx[0] + 1);
-    memset(px + last + 1, TRAP_OUT, 320 - last - 1);
-    for (u16 k = 0; k <= trap_lanes; k++) px[bx[k]] = TRAP_LINE;
+    for (u16 h = 0; h < trap_count; h++)
+    {
+        const Highway *hw = &trap_hw[h];
+        const s16 half = hw->lanes * hw->lane_w / 2;
+        s16 bx[NUM_LANES + 1];
+        for (u16 k = 0; k <= hw->lanes; k++)
+            bx[k] = clamp(hw->cx + (((s32) (hw->lane_w * k - half) * scale + 128) >> 8), 0, 319);
+        memset(px + bx[0], 0, bx[hw->lanes] - bx[0] + 1);
+        for (u16 k = 0; k <= hw->lanes; k++) px[bx[k]] = TRAP_LINE;
+    }
 }
 
-void perspective_build(u16 lanes, u16 lane_w)
+void perspective_build(u16 count, const Highway *highways)
 {
-    if (lanes == trap_lanes && lane_w == trap_lane_w) return;
-    trap_lanes = lanes;
-    trap_lane_w = lane_w;
+    bool same = count == trap_count;
+    for (u16 i = 0; i < count && same; i++)
+        same = highways[i].cx == trap_hw[i].cx && highways[i].lanes == trap_hw[i].lanes
+               && highways[i].lane_w == trap_hw[i].lane_w;
+    if (same) return;
+    trap_count = count;
+    memcpy(trap_hw, highways, count * sizeof(Highway));
     u16 next = tile_trap;
     u32 t[8];
     const u16 out = TILE_ATTR_FULL(PAL0, 1, 0, 0, tile_solid + TRAP_OUT);
@@ -193,5 +196,6 @@ void perspective_init(void)
         depth_y[d - DEPTH_MIN] = ((s32) SPAN3 * K3 / den + YV3) / 3;
         depth_scale[d - DEPTH_MIN] = (s32) 256 * K3 / den;
     }
-    perspective_build(NUM_LANES, 32);
+    const Highway one = { HWY_CX, NUM_LANES, 32 };
+    perspective_build(1, &one);
 }
