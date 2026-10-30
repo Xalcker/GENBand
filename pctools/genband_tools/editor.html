@@ -1187,6 +1187,150 @@ if (DATA.editable) (function () {
   };
 })();
 </script>
+<script>
+__GENPLAYER__
+</script>
+<script>
+"use strict";
+// --- Escuchar: genplayer.js (el YM2612 y el PSG en JavaScript) toca el flujo de la canción desde la línea de golpe ---
+if (DATA.editable && DATA.player) (function () {
+  const FPS = GenPlayer.FPS;   // cuadros por segundo de la Genesis NTSC (59.92)
+  const P = { ctx: null, buffer: null, preparing: null, source: null, playing: false, t0: 0, cur0: 0, expected: 0, raf: 0 };
+  let button;
+
+  function status(text, bad) {
+    const el = $("msg");
+    el.textContent = text;
+    el.style.color = bad ? css("--err") : css("--muted");
+  }
+
+  async function prepare() {
+    // Pide el flujo de la música al servidor y toca la canción completa una vez (con un audio por canal)
+    if (P.buffer) return;
+    if (!P.preparing) {
+      P.preparing = (async () => {
+        status("Preparando el audio…");
+        const res = await fetch("/api/player");
+        const player = await res.json();
+        if (!res.ok) throw new Error(player.error || res.statusText);
+        const stream = Uint8Array.from(atob(player.stream), (c) => c.charCodeAt(0));
+        const result = await GenPlayer.render(stream, player.frames, {
+          sampleRate: 44100,
+          onProgress: (f) => status(`Preparando el audio… ${Math.round(f * 100)}%`),
+          yieldFn: () => new Promise((r) => setTimeout(r)),
+        });
+        const buffer = P.ctx.createBuffer(1, result.audio.length, result.sampleRate);
+        buffer.copyToChannel(result.audio, 0);
+        P.full = buffer;
+        P.stems = result.stems;
+        P.rate = result.sampleRate;
+        P.mixes = new Map();
+        P.buffer = currentBuffer();
+        status("");
+      })().catch((e) => { P.preparing = null; throw e; });
+    }
+    await P.preparing;
+  }
+
+  // El audio con los canales que se oyen: todos = la mezcla completa; si no, la suma de los de cada canal
+  // (un canal que no suena en toda la canción no trae audio)
+  function currentBuffer() {
+    const audible = CHANNELS.map((c) => isAudible(c.id));
+    if (audible.every(Boolean)) return P.full;
+    const key = audible.map((a) => (a ? 1 : 0)).join("");
+    if (!P.mixes.has(key)) {
+      if (P.mixes.size >= 8) P.mixes.delete(P.mixes.keys().next().value);
+      const sum = new Float32Array(P.full.length);
+      audible.forEach((on, c) => {
+        const stem = P.stems[c];
+        if (on && stem) for (let i = 0; i < sum.length; i++) sum[i] += stem[i] / 32767;
+      });
+      for (let i = 0; i < sum.length; i++) sum[i] = Math.max(-1, Math.min(1, sum[i]));
+      const buffer = P.ctx.createBuffer(1, sum.length, P.rate);
+      buffer.copyToChannel(sum, 0);
+      P.mixes.set(key, buffer);
+    }
+    return P.mixes.get(key);
+  }
+
+  window.onChannelsChanged = () => {
+    if (!P.full) return;   // aún no hay audio: se aplica al prepararlo
+    P.buffer = currentBuffer();
+    if (P.playing) startAt(state.cur);
+  };
+
+  function stopSource() {
+    if (P.source) { try { P.source.stop(); } catch (e) { /* ya terminó */ } P.source.disconnect(); P.source = null; }
+  }
+
+  function startAt(frame) {
+    // La música empieza en el cuadro LEAD_IN: antes de él solo corre el reloj
+    stopSource();
+    P.cur0 = frame;
+    P.t0 = P.ctx.currentTime + 0.05;
+    const source = P.ctx.createBufferSource();
+    source.buffer = P.buffer;
+    source.connect(P.ctx.destination);
+    const lead = Math.max(0, LEAD_IN - frame) / FPS, offset = Math.max(0, frame - LEAD_IN) / FPS;
+    if (offset < P.buffer.duration) source.start(P.t0 + lead, offset);
+    P.source = source;
+    P.expected = frame;
+  }
+
+  function tick() {
+    if (!P.playing) return;
+    if (Math.abs(state.cur - P.expected) > 1.5) startAt(state.cur);   // alguien movió la línea de golpe: seguir desde ahí
+    const frame = P.cur0 + Math.max(0, P.ctx.currentTime - P.t0) * FPS;
+    if (frame >= SONG_END + 30) { pause(); return; }
+    state.cur = P.expected = frame;
+    keepTimelineFollowing();
+    redraw();
+    P.raf = requestAnimationFrame(tick);
+  }
+
+  async function play() {
+    if (P.playing) return;
+    try {
+      if (!P.ctx) P.ctx = new (window.AudioContext || window.webkitAudioContext)();
+      if (P.ctx.state === "suspended") await P.ctx.resume();
+      await prepare();
+    } catch (e) { status(`No pude preparar el audio: ${e.message}`, true); return; }
+    if (state.cur >= SONG_END) state.cur = LEAD_IN - 60;
+    P.playing = true;
+    startAt(state.cur);
+    button.textContent = "⏸ Pausa";
+    P.raf = requestAnimationFrame(tick);
+  }
+
+  function pause() {
+    P.playing = false;
+    cancelAnimationFrame(P.raf);
+    stopSource();
+    if (button) button.textContent = "▶ Escuchar";
+  }
+
+  window.addEventListener("DOMContentLoaded", () => {
+    button = document.createElement("button");
+    button.textContent = "▶ Escuchar";
+    button.title = "Toca la canción con el YM2612 y el PSG emulados desde la línea de golpe (Espacio)";
+    button.onclick = () => (P.playing ? pause() : play());
+    $("playslot").append(button);
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.code !== "Space" || e.ctrlKey || e.metaKey || e.altKey || e.target.closest("input, select, textarea, dialog")) return;
+    e.preventDefault();
+    if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+    if (P.playing) pause(); else play();
+  });
+  window.addEventListener("beforeunload", pause);
+  // Teclas 1-9 y 0: silenciar FM 1-6, PSG 1-3 y el ruido (con Mayús: dejar solo ese)
+  document.addEventListener("keydown", (e) => {
+    if (e.ctrlKey || e.metaKey || e.altKey || e.target.closest("input, select, textarea, dialog")) return;
+    const c = e.code.match(/^(?:Digit|Numpad)([0-9])$/);
+    if (c) { e.preventDefault(); toggleChannel(CHANNELS[(Number(c[1]) + 9) % 10].id, e.shiftKey ? "solo" : "mute"); }
+  });
+})();
+</script>
 __MENU__
 </body>
 </html>

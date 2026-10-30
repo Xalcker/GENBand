@@ -12,6 +12,7 @@ JavaScript (pendiente).
 
 from __future__ import annotations
 
+import base64
 import contextlib
 import io
 import json
@@ -36,6 +37,7 @@ from .drums import ROLE_LABELS, ROLE_LANE, ROLES, check_assignment, drum_groups,
 
 HTML_PATH = Path(__file__).with_name("editor.html")
 HOME_PATH = Path(__file__).with_name("home.html")  # la página sin canción abierta
+GENPLAYER_PATH = Path(__file__).with_name("genplayer.js")  # el YM2612 y el PSG que tocan la canción
 MENU_PATH = Path(__file__).with_name("menu.html")  # el menú Archivo, compartido por las dos
 
 SOURCE_SUFFIXES = (".vgm", ".vgz")
@@ -143,7 +145,15 @@ def export_song(sd: cli.SongData, charts: dict[str, list[ChartNote]], assignment
 def render_page(payload: dict, template: Path = HTML_PATH) -> str:
     data = json.dumps(payload, ensure_ascii=True, separators=(",", ":")).replace("</", "<\\/")
     menu = MENU_PATH.read_text(encoding="utf-8")
-    return template.read_text(encoding="utf-8").replace("__MENU__", menu, 1).replace("__DATA__", data, 1)
+    page = template.read_text(encoding="utf-8")
+    if "__GENPLAYER__" in page:
+        page = page.replace("__GENPLAYER__", GENPLAYER_PATH.read_text(encoding="utf-8"), 1)
+    return page.replace("__MENU__", menu, 1).replace("__DATA__", data, 1)
+
+
+def player_payload(sd: cli.SongData) -> dict:
+    """El flujo de la música (el mismo que va en song.c) para que la página lo toque con genplayer.js."""
+    return {"stream": base64.b64encode(sd.stream).decode("ascii"), "frames": sd.stream_frames}
 
 
 # --- Menú Archivo: canciones disponibles, fuentes para importar y la canción abierta -----------
@@ -252,8 +262,12 @@ class Handler(BaseHTTPRequestHandler):
                     if self.app.sd is None:
                         page = render_page({"home": True}, HOME_PATH)
                     else:
-                        page = render_page({**build_payload(self.app.sd), "editable": True})
+                        page = render_page({**build_payload(self.app.sd), "editable": True, "player": True})
                     self._send(200, page.encode("utf-8"), "text/html; charset=utf-8")
+                elif url.path == "/api/player":
+                    if self.app.sd is None:
+                        raise ValueError("no hay canción abierta")
+                    self._json(200, player_payload(self.app.sd))
                 elif url.path == "/api/songs":
                     self._json(200, {"songs": list_songs()})
                 elif url.path == "/api/sources":

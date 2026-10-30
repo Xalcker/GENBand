@@ -1,13 +1,15 @@
+import base64
 import json
 import re
 import shutil
+import subprocess
 import threading
 import urllib.error
 import urllib.request
 from pathlib import Path
 
 import pytest
-from genband_tools import cli, editor
+from genband_tools import cli, editor, vgm
 from genband_tools.chart import ChartNote
 from genband_tools.chartedit import (
     apply_edits,
@@ -142,6 +144,7 @@ def test_payload_and_page(song_copy):
     assert all(not p for p in payload["problems"].values())
     page = editor.render_page({**payload, "editable": True})
     assert "__DATA__" not in page and "__MENU__" not in page and "TORMENTA DE NEON" in page
+    assert "__GENPLAYER__" not in page and "const GenPlayer" in page   # el reproductor va dentro de la página
 
 
 def test_save_and_export_through_the_server(song_copy):
@@ -172,6 +175,9 @@ def test_save_and_export_through_the_server(song_copy):
         assert first_count((song_copy / "song.c").read_text()) == first_count(original) - 1
         with pytest.raises(urllib.error.HTTPError):
             post("/api/save", {"song": "otra", "charts": charts})
+        with urllib.request.urlopen(base + "/api/player") as res:
+            player = json.loads(res.read())
+        assert base64.b64decode(player["stream"]) == sd.stream and player["frames"] == sd.stream_frames
     finally:
         server.shutdown()
 
@@ -190,3 +196,23 @@ def test_import_rejects_bad_requests():
         editor.import_new_song(app, {"name": "tormenta", "source": "audio/tormenta.vgm"})
     with pytest.raises(ValueError):
         editor.import_new_song(app, {"name": "nueva_cancion", "source": "README.md"})
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="hace falta node para correr genplayer.js")
+def test_genplayer_plays_tormenta(tmp_path):
+    """genplayer.js (lo que usa Escuchar) toca la canción: suena, dura lo que dura el flujo, y la mezcla es
+    la suma de los canales (así silencia el editor)."""
+    sd = editor.load_song_source("tormenta")
+    frames = 600   # los primeros 10 s bastan
+    stream = tmp_path / "flujo.bin"
+    stream.write_bytes(sd.stream)
+    out = subprocess.run(["node", str(Path(__file__).with_name("genplayer_run.js")), str(stream), str(frames)],
+                         capture_output=True, text=True, check=True)
+    result = json.loads(out.stdout)
+    assert result["samples"] == pytest.approx(frames / 59.9227 * 44100, abs=50)
+    assert result["rms"] > 0.02
+    assert result["mixError"] < 1e-3
+    # Cada canal con notas en esos 10 s suena
+    playing = {name for name, rms in zip(vgm.CHANNEL_NAMES, result["channels"]) if rms > 1e-3}
+    with_notes = {vgm.CHANNEL_NAMES[ch] for ch, ns in sd.notes.items() if any(n.frame < frames for n in ns)}
+    assert with_notes and with_notes <= playing

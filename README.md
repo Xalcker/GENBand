@@ -261,10 +261,14 @@ dependencias; el servidor solo escucha en `127.0.0.1`).
   vuelve a importar la canción, con lo que su `song.c` sale con los charts editados.
 - **Batería:** la tabla de abajo da a cada grupo de golpes su papel (bombo, tarola, toms, platillo) y rehace al
   momento los charts de batería; se guarda en `drums.json`.
+- **Escuchar** (`Espacio`) toca la canción desde la línea de golpe, y la línea avanza con la música. La toca
+  `genplayer.js`, un emulador del YM2612 y del PSG en JavaScript (sigue al `fm.c` de MAME) que reproduce el mismo
+  flujo que va en la ROM; la primera vez tarda un par de segundos en prepararlo. Los botones **M**/**S** de cada
+  canal (o las teclas `1`-`9` y `0` para FM 1-6, PSG 1-3 y ruido; con `Mayús`, solo) lo silencian o dejan
+  solo. No emula el DAC, el SSG-EG ni el modo especial del canal 3 (las canciones de GENBand no los usan).
 
 `--no-open` no abre el navegador, `--port` cambia el puerto y `--html ruta.html` escribe una página de solo
-lectura. **Aún no tiene "Escuchar":** tocar la canción en el navegador necesita un emulador del YM2612 y del PSG
-en JavaScript (pendiente).
+lectura (sin Escuchar).
 
 ## Canciones originales
 
@@ -326,7 +330,10 @@ todas las notas y siga si un jugador cae, y que el audio suene. El bot toca con 
 corre solo los casos que coinciden; `--no-build` usa la ROM que ya está.
 
 `pytest` prueba el lector y escritor de VGM, la extracción de notas, el generador de charts y el editor (las
-ediciones y guardar y exportar a través de su servidor, sobre una copia de la canción).
+ediciones y guardar y exportar a través de su servidor, sobre una copia de la canción). Si hay `node`, también
+toca una canción con `genplayer.js` (`tests/genplayer_run.js` escribe la mezcla en un WAV). Contra el audio de
+MAME, la vista previa de *Tormenta de neón* da una correlación de 0.95 en la envolvente (ventanas de 50 ms) y el
+mismo volumen (MAME/JS 1.00); la música del título, 0.86.
 
 ## Cómo está hecho
 
@@ -348,14 +355,13 @@ ediciones y guardar y exportar a través de su servidor, sobre una copia de la c
 ## Hoja de ruta
 
 GENBand ya tiene lo que tiene NESBand (1 y 2 jugadores, batería, opciones y práctica, récords, escenario,
-release y editor de charts). Lo que falta, más o menos en orden:
+release y editor de charts con Escuchar). Lo que falta, más o menos en orden:
 
-1. **Escuchar en el editor de charts:** un reproductor del YM2612 y del PSG en JavaScript.
-2. Driver de sonido en el Z80 para el **DAC** (la batería sampleada de los VGM de otros juegos) y para que la
+1. Driver de sonido en el Z80 para el **DAC** (la batería sampleada de los VGM de otros juegos) y para que la
    música no dependa del 68000.
-3. Generar los gráficos al compilar (en Python) en vez de al arrancar: hoy el arranque tarda ~2 s.
-4. Mejor arte del escenario (los haces de luz y el público son sencillos) y público también con 2 jugadores.
-5. Probar en hardware (flash cart y MiSTer).
+2. Generar los gráficos al compilar (en Python) en vez de al arrancar: hoy el arranque tarda ~2 s.
+3. Mejor arte del escenario (los haces de luz y el público son sencillos) y público también con 2 jugadores.
+4. Probar en hardware (flash cart y MiSTer).
 
 ## Licencia
 
