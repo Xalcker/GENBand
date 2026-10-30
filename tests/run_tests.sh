@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Pruebas de GENBand en MAME: el bot (tests/autoplay.lua) juega cada caso y se revisa su resultado.
+# MAME corre sin video (-video none) y en ventana (-window), para que no tome la pantalla completa.
 #
 #   tests/run_tests.sh              compila y corre todos los casos
 #   tests/run_tests.sh --no-build   con la ROM que ya está en build/
@@ -35,7 +36,7 @@ run_case() {
     rm -rf "$dir"
     mkdir -p "$dir"
     GENBAND_SYM="$SYM" GENBAND_OUT="$dir" GENBAND_SONG=$song GENBAND_INSTR=$instr GENBAND_DIFF=$diff \
-    GENBAND_MODE=$mode GENBAND_OPTS="$opts" mame genesis -cart "$ROM" -video none -sound none -nothrottle -skip_gameinfo \
+    GENBAND_MODE=$mode GENBAND_OPTS="$opts" mame genesis -cart "$ROM" -window -nomaximize -video none -sound none -nothrottle -skip_gameinfo \
         -wavwrite "$dir/audio.wav" -snapshot_directory "$dir" -cfg_directory "$dir/cfg" \
         -nvram_directory "$dir/nvram" -autoboot_script tests/autoplay.lua >"$dir/mame.log" 2>&1
     if [ ! -f "$dir/resultado.txt" ]; then

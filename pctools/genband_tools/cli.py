@@ -339,6 +339,42 @@ def build_sfx() -> None:
     print(f"src/sfx_data.c: {len(labels)} efectos")
 
 
+FONT_COLOR = 15  # el índice de color del texto en todas las paletas (ver gfx.c)
+
+
+def cmd_build_font(args: argparse.Namespace) -> None:
+    """La fuente de las letras, de los tiles de NESBand (Bongo-8 Mono, de dominio público, CC0 1.0).
+
+    Lee el src/font.s de NESBand (un tile por carácter, en texto: "." vacío y "1" la letra) y escribe
+    src/font_data.c: un tile de 4 bits por carácter, con la letra en el color FONT_COLOR. Los tiles que
+    en NESBand son dibujos del juego y no letras (la barra del bombo, en $22 y $23) se omiten; los
+    caracteres que la fuente no trae se quedan con los de SGDK."""
+    source = Path(args.source)
+    text = source.read_text(encoding="utf-8")
+    glyphs: dict[int, list[str]] = {}
+    for code, rows in re.findall(r"TILE_AT \$([0-9A-Fa-f]{2})[^\n]*\nTILE ((?:\"[^\"]{8}\",?\s*){8})", text):
+        rows = re.findall(r'"([^"]{8})"', rows)
+        if any(c not in ".1" for row in rows for c in row):
+            continue  # un dibujo del juego en otros colores
+        glyphs[int(code, 16)] = rows
+    out = [
+        "// Generado por genband build-font desde el src/font.s de NESBand: no editar a mano.",
+        "// Bongo-8 Mono, de Caffinate (Nathan Scott), de dominio público (CC0 1.0).",
+        '#include "genband.h"',
+        "",
+        f"const u16 font_count = {len(glyphs)};",
+        "const u8 font_codes[] = { " + ", ".join(f"0x{c:02X}" for c in sorted(glyphs)) + " };",
+        "const u32 font_tiles[] = {",
+    ]
+    for code in sorted(glyphs):
+        words = ["0x" + "".join("F" if c == "1" else "0" for c in row) for row in glyphs[code]]
+        label = chr(code) if 32 < code < 127 else " "
+        out.append(f"    {', '.join(words)},  // {label}")
+    out.append("};\n")
+    (ROOT / "src" / "font_data.c").write_text("\n".join(out), encoding="utf-8", newline="\n")
+    print(f"src/font_data.c: {len(glyphs)} caracteres")
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="genband", description="Herramientas de PC para GENBand")
     sub = parser.add_subparsers(required=True)
@@ -365,6 +401,10 @@ def main(argv: list[str] | None = None) -> None:
 
     p = sub.add_parser("list-songs", help="lista las canciones de src/songs/")
     p.set_defaults(func=cmd_list)
+
+    p = sub.add_parser("build-font", help="convierte la fuente de NESBand (Bongo-8 Mono) a src/font_data.c")
+    p.add_argument("source", nargs="?", default=str(ROOT.parent / "NESBand" / "src" / "font.s"))
+    p.set_defaults(func=cmd_build_font)
 
     p = sub.add_parser("build-audio", help="convierte la música del título (audio/titulo.py)")
     p.set_defaults(func=cmd_build_audio)

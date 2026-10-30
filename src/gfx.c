@@ -315,6 +315,10 @@ void gfx_init(void)
     PAL_setColors(0, palettes, 64, CPU);
     next_tile = TILE_USER_INDEX;
 
+    // Las letras de NESBand (Bongo-8 Mono) en lugar de las de SGDK; lo que no trae se queda como está
+    for (u16 i = 0; i < font_count; i++)
+        VDP_loadTileData(&font_tiles[i * 8], TILE_FONT_INDEX + font_codes[i] - 32, 1, CPU);
+
     u32 t[8];
     tile_solid = next_tile;
     for (u16 c = 0; c < 16; c++)

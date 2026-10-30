@@ -122,6 +122,11 @@ void gfx_init(void);
 
 u16 gfx_load_tile(const u32 *data);
 
+// La fuente de NESBand (font_data.c, de genband build-font): reemplaza las letras de la de SGDK
+extern const u16 font_count;
+extern const u8 font_codes[];
+extern const u32 font_tiles[];
+
 extern u16 tile_solid;          // + color (0-15): un tile de un solo color
 extern u16 tile_scroll;         // capa que se desplaza: líneas de tiempo (ver gfx.c)
 extern u16 tile_gem;            // sprites de 4x2 tiles (8 tiles cada uno): + (escala * 5 + carril) * 8

@@ -269,4 +269,8 @@ Lo que ya tiene NESBand y falta aquí, más o menos en orden:
 
 ## Licencia
 
-GPL-2.0-or-later (ver `LICENSE`). SGDK tiene su propia licencia (MIT) y no se incluye en el repositorio.
+GPL-2.0-or-later (ver `LICENSE`).
+
+- **La fuente de las letras** es la de NESBand: *Bongo-8 Mono* de Caffinate (Nathan Scott), de dominio público
+  (CC0 1.0). `uv run genband build-font` la convierte de `NESBand/src/font.s` a `src/font_data.c`; los
+  caracteres que no trae se quedan con los de SGDK. SGDK tiene su propia licencia (MIT) y no se incluye en el repositorio.
