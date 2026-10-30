@@ -106,76 +106,39 @@ void perspective_stop(void)
 
 // --- Tablas y trapecio ----------------------------------------------------------------------------
 
-// Colores del trapecio (PAL0): afuera, el escenario (3); las orillas y las líneas de los carriles (2);
-// adentro, transparente (se ve el color de fondo, que es el de la autopista)
-#define TRAP_OUT    3
-#define TRAP_LINE   2
+// El trapecio de cada combinación de autopistas se dibuja en Python (graficos.py, `genband build-gfx`) y
+// llega en trap_gfx.c: sus tiles distintos (las orillas y las líneas de los carriles) y un mapa. Afuera
+// queda el escenario (el color 3, que stage.c cubre con su dibujo) y adentro el color de fondo, que es el
+// de la autopista.
 
-// El trapecio se dibuja de 8 en 8 líneas (un renglón de tiles) en un búfer de píxeles y luego se empaca
-// en tiles: los que quedan de un solo color (todo escenario o todo autopista) no gastan VRAM
-static u8 pixels[8][320];
+static const TrapLayout *trap_now;      // el que está en la VRAM
 
-static Highway trap_hw[MAX_PLAYERS];    // las autopistas del trapecio que está en la VRAM
-static u16 trap_count;
-
-static void draw_line(u8 *px, u16 line)
+static bool layout_is(const TrapLayout *l, u16 count, const Highway *highways)
 {
-    memset(px, TRAP_OUT, 320);
-    if (line < HWY_TOP) return;
-    const u16 scale = line_scale[line];
-    for (u16 h = 0; h < trap_count; h++)
-    {
-        const Highway *hw = &trap_hw[h];
-        const s16 half = hw->lanes * hw->lane_w / 2;
-        s16 bx[NUM_LANES + 1];
-        for (u16 k = 0; k <= hw->lanes; k++)
-            bx[k] = clamp(hw->cx + (((s32) (hw->lane_w * k - half) * scale + 128) >> 8), 0, 319);
-        memset(px + bx[0], 0, bx[hw->lanes] - bx[0] + 1);
-        for (u16 k = 0; k <= hw->lanes; k++) px[bx[k]] = TRAP_LINE;
-    }
+    if (l->count != count) return FALSE;
+    for (u16 i = 0; i < count; i++)
+        if (l->highways[i].cx != highways[i].cx || l->highways[i].lanes != highways[i].lanes
+            || l->highways[i].lane_w != highways[i].lane_w)
+            return FALSE;
+    return TRUE;
 }
 
 void perspective_build(u16 count, const Highway *highways)
 {
-    bool same = count == trap_count;
-    for (u16 i = 0; i < count && same; i++)
-        same = highways[i].cx == trap_hw[i].cx && highways[i].lanes == trap_hw[i].lanes
-               && highways[i].lane_w == trap_hw[i].lane_w;
-    if (same) return;
-    trap_count = count;
-    memcpy(trap_hw, highways, count * sizeof(Highway));
-    u16 next = tile_trap;
-    u32 t[8];
-    const u16 out = TILE_ATTR_FULL(PAL0, 1, 0, 0, tile_solid + TRAP_OUT);
+    const TrapLayout *l = &trap_layouts[0];
+    for (u16 i = 0; i < trap_layout_count; i++)
+        if (layout_is(&trap_layouts[i], count, highways)) l = &trap_layouts[i];
+    if (l == trap_now) return;
+    trap_now = l;
+    VDP_loadTileData(l->tiles, tile_trap, l->tile_count, CPU);
+    const u16 out = TILE_ATTR_FULL(PAL0, 1, 0, 0, tile_solid + 3);
     const u16 inside = TILE_ATTR_FULL(PAL0, 1, 0, 0, 0);
     for (u16 row = 0; row < STRIP_ROW; row++)
-    {
-        for (u16 y = 0; y < 8; y++) draw_line(pixels[y], row * 8 + y);
         for (u16 col = 0; col < 40; col++)
         {
-            const u8 first = pixels[0][col * 8];
-            bool uniform = TRUE;
-            for (u16 y = 0; y < 8; y++)
-            {
-                u32 line = 0;
-                const u8 *px = &pixels[y][col * 8];
-                for (u16 x = 0; x < 8; x++)
-                {
-                    line = (line << 4) | px[x];
-                    if (px[x] != first) uniform = FALSE;
-                }
-                t[y] = line;
-            }
-            if (uniform && first == TRAP_OUT) trap_map[row][col] = out;
-            else if (uniform && first == 0) trap_map[row][col] = inside;
-            else if (next < TILE_FONT_INDEX)
-            {
-                VDP_loadTileData(t, next, 1, CPU);
-                trap_map[row][col] = TILE_ATTR_FULL(PAL0, 1, 0, 0, next++);
-            }
-            else trap_map[row][col] = inside;   // (no debería pasar: la VRAM no alcanzó)
+            const u8 v = l->map[row][col];
+            trap_map[row][col] = v == 0 ? inside : (v == 1 ? out : TILE_ATTR_FULL(PAL0, 1, 0, 0, tile_trap + v - 2));
         }
-    }
 }
 
 void perspective_init(void)
@@ -194,6 +157,4 @@ void perspective_init(void)
         depth_y[d - DEPTH_MIN] = ((s32) SPAN3 * K3 / den + YV3) / 3;
         depth_scale[d - DEPTH_MIN] = (s32) 256 * K3 / den;
     }
-    const Highway one = { HWY_CX, NUM_LANES, 32 };
-    perspective_build(1, &one);
 }

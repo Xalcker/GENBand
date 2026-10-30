@@ -153,8 +153,9 @@ Son las de NESBand:
 - **Estrellas:** salen del puntaje (sin el poder estelar ni las colas) contra el puntaje perfecto: 20, 40,
   60, 80 y 95%.
 
-**Escenario:** alrededor de la autopista hay un escenario de concierto (bocinas, torres con su foco y su haz
-de luz) y, abajo a los lados, el **público**. Reacciona a cómo juegas, como en NESBand:
+**Escenario:** alrededor de la autopista hay un escenario de concierto: un truss con focos arriba, haces de
+luz sobre la pared, torres de bocinas a los lados y, abajo, el **público** (tres filas a contraluz, con el
+borde iluminado por las luces del escenario). Reacciona a cómo juegas, como en NESBand:
 
 - Sin combo (menos de 10), el público está quieto.
 - Con combo, levanta los brazos y **salta al empezar cada tiempo de la canción**, y la luz late con él.
@@ -162,8 +163,10 @@ de luz) y, abajo a los lados, el **público**. Reacciona a cómo juegas, como en
 - Al completar una **frase estelar** cae un **rayo** sobre el carril de su última nota y las luces destellan.
 - Si pierden todos, las luces se apagan.
 
-Con 2 jugadores, el escenario es una torre con dos focos en el centro, entre las dos autopistas. Casi no
-cuesta CPU: las luces son dos colores de la paleta y el público son 4 tiles que se redibujan por DMA.
+Con 2 jugadores, el truss va en medio, hay una torre de luces entre las dos autopistas con público abajo, y
+un balcón con público en cada esquina de arriba. Casi no cuesta CPU: las luces son dos colores de la paleta
+(los haces, los focos y el borde del público los usan) y el público es una franja de tiles que se redibuja
+por DMA.
 
 **Récords:** el cartucho guarda el mejor puntaje de cada **canción, instrumento y dificultad**. En el menú,
 debajo de FALLO, ves el récord de lo que elegiste (`0029920 ABC *****`: puntaje, iniciales y estrellas, o
@@ -348,8 +351,12 @@ mismo volumen (MAME/JS 1.00); la música del título, 0.86.
 ## Cómo está hecho
 
 - **C con SGDK**, compilado con `build.sh` (no con el makefile de SGDK, que pide herramientas de Windows o
-  Java). Los gráficos no son imágenes: `src/gfx.c` dibuja las gemas, los aros, las llamaradas y las colas
-  píxel por píxel al arrancar.
+  Java). Los gráficos no son imágenes: se dibujan en Python al compilar (`uv run genband build-gfx`) y la ROM
+  los trae ya en tiles: `graficos.py` las gemas, los aros, las llamaradas, las colas y el trapecio de la
+  autopista de cada combinación de autopistas (`src/gfx_data.c`, `src/trap_gfx.c`), y `escenario.py` el
+  escenario de 1 y 2 jugadores (`src/stage_gfx.c`, con los tiles repetidos o en espejo una sola vez;
+  `--png carpeta` deja una vista previa). Así la consola arranca en menos de 1 segundo. Las pruebas de
+  `pytest` revisan que esos archivos estén al día y que todo quepa en la VRAM.
 - **La autopista en perspectiva** (`src/perspective.c`): la Genesis no escala por hardware, así que el
   fondo (plano B) es un trapecio ya dibujado, con prioridad alta afuera para tapar lo demás; las líneas de
   tiempo (plano A) usan una **interrupción por línea** (`src/hint.s`) que cambia el scroll vertical en cada
@@ -375,11 +382,9 @@ mismo volumen (MAME/JS 1.00); la música del título, 0.86.
 ## Hoja de ruta
 
 GENBand ya tiene lo que tiene NESBand (1 y 2 jugadores, batería, opciones y práctica, récords, escenario,
-release, editor de charts con Escuchar y la batería sampleada del DAC). Lo que falta, más o menos en orden:
+release, editor de charts con Escuchar y la batería sampleada del DAC). Lo que falta:
 
-1. Generar los gráficos al compilar (en Python) en vez de al arrancar: hoy el arranque tarda ~2 s.
-2. Mejor arte del escenario (los haces de luz y el público son sencillos) y público también con 2 jugadores.
-3. Probar en hardware (sobre todo el DAC: el 68000 y el Z80 compartiendo el YM2612) (flash cart y MiSTer).
+1. Probar en hardware (sobre todo el DAC: el 68000 y el Z80 compartiendo el YM2612) (flash cart y MiSTer).
 
 ## Licencia
 

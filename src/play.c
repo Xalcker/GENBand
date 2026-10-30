@@ -869,10 +869,11 @@ static void draw_stage(void)
     stage_draw(nplayers);
     if (nplayers == 1)
     {
-        draw_text(BG_B, instrument_names[players[0].instrument], 1, 2, PAL0);
-        draw_text(BG_B, difficulty_names[players[0].difficulty], 1, 3, PAL1);
+        // (en la franja de abajo: arriba están los focos)
+        draw_text(WINDOW, instrument_names[players[0].instrument], 1, 25, PAL0);
+        draw_text(WINDOW, difficulty_names[players[0].difficulty], 1, 26, PAL1);
         if (!no_fail) draw_text(BG_B, "VIDA", players[0].meter_col, players[0].meter_row - 1, PAL1);
-        if (sel.practice) draw_text(BG_B, "PRACTICA", 1, 5, PAL2);
+        if (sel.practice) draw_text(WINDOW, "PRACTICA", 31, 25, PAL2);
     }
     else
     {
@@ -1019,7 +1020,7 @@ static void start_player(u16 i, u16 instrument, u16 difficulty, s16 cx)
     p->pad = i;
     p->s = coop ? &band : &scores[i];
     // El medidor de vida: con un jugador junto a la autopista; con dos, en las orillas
-    p->meter_col = nplayers == 1 ? 31 : (i ? 39 : 0);
+    p->meter_col = nplayers == 1 ? 30 : (i ? 39 : 0);
     p->meter_row = nplayers == 1 ? 13 : 9;
 }
 

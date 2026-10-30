@@ -7,6 +7,7 @@
     uv run genband reimport                      (todas, con las mismas opciones, tras mejorar el generador)
     uv run genband build-audio                   (música del título, de audio/titulo.py)
     uv run genband edit-chart [tormenta]         (el editor de charts en el navegador)
+    uv run genband build-gfx                     (los gráficos y el escenario: src/gfx_data.c, src/stage_gfx.c)
 
 import-song genera src/songs/<nombre>/song.c: el flujo de la música (ver vgm.frame_stream), un chart
 por instrumento y dificultad y la ficha de la canción que lee el juego (título, tempo, fin, canales).
@@ -467,6 +468,25 @@ def build_sfx() -> None:
 FONT_COLOR = 15  # el índice de color del texto en todas las paletas (ver gfx.c)
 
 
+def cmd_build_gfx(args: argparse.Namespace) -> None:
+    from . import escenario, graficos
+
+    groups = graficos.build()
+    graficos.write_c(groups, ROOT / "src" / "gfx_data.c")
+    stage = escenario.build()
+    escenario.write_c(stage, ROOT / "src" / "stage_gfx.c")
+    graficos.write_trap_c(ROOT / "src" / "trap_gfx.c")
+    print(f"src/gfx_data.c: {sum(len(t) for t in groups.values())} tiles")
+    print(f"src/trap_gfx.c: el trapecio de {len(graficos.LAYOUTS)} combinaciones de autopistas")
+    print(f"src/stage_gfx.c: {len(stage['tiles'])} tiles del escenario y {len(stage['crowd'][0])} del público (x3 dibujos)")
+    if args.png:
+        folder = Path(args.png)
+        folder.mkdir(parents=True, exist_ok=True)
+        escenario.preview_png(stage, "1p", folder / "escenario_1p.png", [(160, 5, 32)])
+        escenario.preview_png(stage, "2p", folder / "escenario_2p.png", [(80, 5, 32), (240, 5, 32)])
+        print(f"vista previa en {folder}/")
+
+
 def cmd_build_font(args: argparse.Namespace) -> None:
     """La fuente de las letras, de los tiles de NESBand (Bongo-8 Mono, de dominio público, CC0 1.0).
 
@@ -545,6 +565,10 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--no-open", action="store_true", help="no abrir el navegador")
     p.add_argument("--html", help="escribir una página de solo lectura en esta ruta, en vez de servir")
     p.set_defaults(func=cmd_edit_chart)
+
+    p = sub.add_parser("build-gfx", help="dibuja los gráficos, el escenario y el trapecio (src/gfx_data.c, stage_gfx.c, trap_gfx.c)")
+    p.add_argument("--png", help="carpeta donde dejar una vista previa del escenario (1 y 2 jugadores)")
+    p.set_defaults(func=cmd_build_gfx)
 
     p = sub.add_parser("build-font", help="convierte la fuente de NESBand (Bongo-8 Mono) a src/font_data.c")
     p.add_argument("source", nargs="?", default=str(ROOT.parent / "NESBand" / "src" / "font.s"))

@@ -160,10 +160,8 @@ extern u16 tile_gem;            // sprites de 4x2 tiles (8 tiles cada uno): + (e
 extern u16 tile_star_gem;
 extern u16 tile_cymbal;         // platillos de la batería (rombos del color del carril), como tile_gem
 extern u16 tile_trap;           // de aquí hasta la fuente: el trapecio de la autopista (perspective_build)
-extern u16 tile_lamp;           // el foco de una torre del escenario
-extern u16 tile_crowd;          // el público: 4 tiles que stage.c redibuja (ver crowd_tiles)
+extern u16 tile_stage;          // el escenario: la franja del público (STAGE_CROWD_TILES) y luego stage_tiles
 extern u16 tile_bolt;           // el rayo de una frase estelar: sprite de 2x4 tiles
-extern u32 crowd_tiles[3 * 4 * 8];
 extern u16 tile_tail;           // sprites de 1x2 tiles: + (ancho * 5 + carril) * 2 (anchos 8, 6 y 4)
 extern u16 tile_ring;
 extern u16 tile_ring_on;
@@ -175,7 +173,25 @@ extern u16 tile_logo;           // + 0..6: los tiles del logo (un color por fila
 // Tile de la capa que se desplaza: line 0 = nada, 1 = tiempo, 2 = compás, 3 = bombo; row = renglón en el tile
 u16 scroll_tile(u16 line, u16 row);
 
-// --- Escenario (stage.c) -------------------------------------------------------------------------
+// --- Escenario (stage.c, con los tiles de stage_gfx.c que genera `genband build-stage`) --------------
+
+#define STAGE_CROWD_W     4     // la franja del público, en tiles (se repite)
+#define STAGE_CROWD_H     8
+#define STAGE_CROWD_TILES (STAGE_CROWD_W * STAGE_CROWD_H)
+#define STAGE_CROWD_MARK  0x8000    // en el mapa: un tile de la franja del público (los bits de abajo: cuál)
+
+// Los tiles de gfx_data.c (de `genband build-gfx`, graficos.py), en el orden en que gfx_init los carga
+extern const u32 gfx_solid[16 * 8], gfx_scroll[24 * 8], gfx_tail[30 * 8];
+extern const u32 gfx_gem[280 * 8], gfx_star_gem[280 * 8], gfx_cymbal[280 * 8];
+extern const u32 gfx_ring[40 * 8], gfx_ring_on[40 * 8], gfx_flame[32 * 8];
+extern const u32 gfx_meter[27 * 8], gfx_starbar[18 * 8], gfx_bolt[8 * 8], gfx_logo[7 * 8];
+
+extern const u16 stage_palette[16];
+extern const u16 stage_tile_count;
+extern const u32 stage_tiles[];
+extern const u32 stage_crowd[3][STAGE_CROWD_TILES * 8];    // sus 3 dibujos: quieto, brazos arriba, saltando
+extern const u16 stage_map_1p[24][40];  // 0 = la pared lisa; si no, (tile + 1) con los bits de volteo del VDP
+extern const u16 stage_map_2p[24][40];
 
 void stage_draw(u16 nplayers);
 void stage_update(u16 now, const Song *song, u16 combo, bool star, bool all_failed);
@@ -205,6 +221,17 @@ typedef struct {
     u16 lanes;                  // carriles (columnas): 5, o 4 en la batería
     u16 lane_w;                 // ancho de cada uno en los aros (px)
 } Highway;
+// El trapecio de una combinación de autopistas, ya dibujado (trap_gfx.c, de `genband build-gfx`): sus tiles
+// y un mapa (0 = adentro, 1 = afuera, n + 2 = el tile n)
+typedef struct {
+    u16 count;
+    Highway highways[MAX_PLAYERS];
+    const u32 *tiles;
+    u16 tile_count;
+    const u8 (*map)[40];
+} TrapLayout;
+extern const TrapLayout trap_layouts[];
+extern const u16 trap_layout_count;
 void perspective_build(u16 count, const Highway *highways);    // el trapecio de 1 o 2 autopistas
 void perspective_start(void);               // enciende la interrupción de cada línea
 void perspective_stop(void);
