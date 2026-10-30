@@ -66,6 +66,30 @@ void draw_number(VDPPlane plane, u32 value, u16 digits, u16 x, u16 y, u16 pal)
     draw_text(plane, str, x, y, pal);
 }
 
+void queue_text(VDPPlane plane, const char *text, u16 x, u16 y, u16 pal)
+{
+    u16 row[40];
+    u16 n = 0;
+    while (text[n] && n < 40)
+    {
+        row[n] = TILE_ATTR_FULL(pal, 1, 0, 0, TILE_FONT_INDEX + text[n] - 32);
+        n++;
+    }
+    VDP_setTileMapDataRow(plane, row, y, x, n, DMA_QUEUE_COPY);
+}
+
+void queue_number(VDPPlane plane, u32 value, u16 digits, u16 x, u16 y, u16 pal)
+{
+    char str[12];
+    uintToStr(value, str, digits);
+    queue_text(plane, str, x, y, pal);
+}
+
+void queue_tile(VDPPlane plane, u16 attr, u16 x, u16 y)
+{
+    VDP_setTileMapDataRow(plane, &attr, y, x, 1, DMA_QUEUE_COPY);
+}
+
 int main(bool hard_reset)
 {
     VDP_setScreenWidth320();

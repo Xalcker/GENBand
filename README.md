@@ -197,10 +197,13 @@ corre solo los casos que coinciden; `--no-build` usa la ROM que ya está.
 - **C con SGDK**, compilado con `build.sh` (no con el makefile de SGDK, que pide herramientas de Windows o
   Java). Los gráficos no son imágenes: `src/gfx.c` dibuja las gemas, los aros, las llamaradas y las colas
   píxel por píxel al arrancar.
-- **La autopista:** el plano B tiene el escenario y el fondo de los carriles; el plano A, las líneas de
-  tiempo y las colas, con el **scroll vertical por columnas** del VDP (las 10 columnas de la autopista bajan,
-  las de los lados no, y ahí van textos fijos). Las gemas son sprites, en su posición exacta. La franja de
-  abajo es la ventana del VDP.
+- **La autopista en perspectiva** (`src/perspective.c`): la Genesis no escala por hardware, así que el
+  fondo (plano B) es un trapecio ya dibujado, con prioridad alta afuera para tapar lo demás; las líneas de
+  tiempo (plano A) usan una **interrupción por línea** (`src/hint.s`) que cambia el scroll vertical en cada
+  línea de pantalla, como las carreteras de los juegos de carreras; y las gemas (en 7 tamaños) y las colas
+  (sprites de 8x16 en 3 anchos) se ponen donde caen. Mientras se juega, nada escribe en el VDP fuera de la
+  vblank (todo va por la cola de DMA) para no chocar con la interrupción. La franja de abajo es la ventana
+  del VDP.
 - **Las notas** se leen del chart poco antes de entrar a la pantalla y viven en una cola de 64; de ahí se
   juzgan y se dibujan. El formato del chart es el de NESBand: pares (cuadros desde la anterior, carriles).
 - **La música:** `src/music.c` aplica una vez por cuadro las escrituras del flujo; el Z80 se queda detenido

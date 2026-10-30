@@ -58,8 +58,8 @@ sed "s#out/rom_head.bin#$OUT/rom_head.bin#" src/boot/sega.s > "$OUT/sega.s"
     -c "$OUT/sega.s" -o "$OUT/obj/sega.o"
 
 objs=()
-for src in src/*.c src/songs/*/song.c "$OUT/song_list.c"; do
-    obj="$OUT/obj/$(echo "${src%.c}" | tr '/' '_').o"
+for src in src/*.c src/*.s src/songs/*/song.c "$OUT/song_list.c"; do
+    obj="$OUT/obj/$(echo "${src%.*}" | tr '/' '_').o"
     "${PREFIX}gcc" "${CFLAGS[@]}" -c "$src" -o "$obj"
     objs+=("$obj")
 done

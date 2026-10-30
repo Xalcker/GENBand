@@ -153,6 +153,9 @@ emu.register_frame_done(function()
     end
 
     local s = screen()
+    if frame % 600 == 0 then
+        note(string.format("pantalla %d, cuadro de la canción %d", s, mem:read_u16(sym.now)))
+    end
     if state == "titulo" then
         if s == SCREEN_TITLE then
             title_frames = (title_frames or 0) + 1

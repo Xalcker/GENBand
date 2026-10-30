@@ -1,5 +1,6 @@
 // Gráficos: las paletas y todos los tiles del juego. No hay imágenes: cada dibujo (gemas, aros,
-// llamaradas, colas) se genera aquí al arrancar, píxel por píxel, y se copia a la VRAM.
+// llamaradas, colas) se genera aquí al arrancar, píxel por píxel, y se copia a la VRAM. Las gemas van en
+// GEM_SCALES tamaños para la perspectiva (el VDP no escala sprites: se elige el dibujo del tamaño que toca).
 //
 // Paletas (el índice 15 de cada una es un color de texto, porque la fuente de SGDK usa ese índice):
 //   PAL0  escenario y autopista; texto blanco
@@ -35,7 +36,7 @@ static const u16 palettes[64] = {
     C(0x181818), C(0xE0E0E0), C(0x40C0FF), C(0x303040), C(0x000000), C(0x000000), C(0x000000), C(0xFF5040),
 };
 
-u16 tile_solid, tile_hwy, tile_scroll, tile_gem, tile_star_gem, tile_ring, tile_ring_on, tile_flame;
+u16 tile_solid, tile_scroll, tile_gem, tile_star_gem, tile_ring, tile_ring_on, tile_flame, tile_tail;
 u16 tile_meter, tile_starbar, tile_logo;
 
 static u16 next_tile;
@@ -48,6 +49,11 @@ static u16 load(const u32 *data, u16 count)
     VDP_loadTileData(data, index, count, CPU);
     next_tile += count;
     return index;
+}
+
+u16 gfx_load_tile(const u32 *data)
+{
+    return load(data, 1);
 }
 
 static void clear_canvas(void)
@@ -72,22 +78,29 @@ static u16 load_canvas(void)
 }
 
 // Las formas se dibujan una vez con los colores del carril 0 (P1_LANE y P1_DARK) y se recolorean para
-// cada carril: calcular la forma es lo lento (el 68000 no divide rápido)
-static u8 shape[16][32];
-
+// cada carril: calcular la forma es lo lento (el 68000 no divide rápido). El recoloreo se hace sobre los
+// tiles ya empacados, byte por byte, con una tabla (cada byte son dos píxeles)
 static u16 load_lanes(void)
 {
-    memcpy(shape, canvas, sizeof(shape));
+    u32 shape[8 * 8];
+    u8 map[256];
+    load_canvas();
+    next_tile -= 8;             // load_canvas dejó la forma en buf; el carril 0 se vuelve a cargar abajo
+    memcpy(shape, buf, sizeof(shape));
     const u16 first = next_tile;
     for (u16 lane = 0; lane < NUM_LANES; lane++)
     {
-        for (u16 y = 0; y < 16; y++)
-            for (u16 x = 0; x < 32; x++)
-            {
-                const u8 c = shape[y][x];
-                canvas[y][x] = (c == P1_LANE || c == P1_DARK) ? c + lane : c;
-            }
-        load_canvas();
+        for (u16 b = 0; b < 256; b++)
+        {
+            u8 hi = b >> 4, lo = b & 15;
+            if (hi == P1_LANE || hi == P1_DARK) hi += lane;
+            if (lo == P1_LANE || lo == P1_DARK) lo += lane;
+            map[b] = (hi << 4) | lo;
+        }
+        const u8 *src = (const u8 *) shape;
+        u8 *dst = (u8 *) buf;
+        for (u16 i = 0; i < sizeof(shape); i++) dst[i] = map[src[i]];
+        load(buf, 8);
     }
     return first;
 }
@@ -104,35 +117,52 @@ static inline s32 ellipse_inv(s16 x, s16 y, u16 inv_x, u16 inv_y)
 }
 #define ellipse(x, y, rx, ry) ellipse_inv((x), (y), INV(rx), INV(ry))
 
-static void draw_gem(bool star)
+// Una gema a escala k (0 = tamaño completo, cada paso es 10% más chica): elipse con brillo, o diamante
+// si es estelar
+static void draw_gem(bool star, u16 k)
 {
+    const s16 sc = 10 - k;                              // escala en décimas
     clear_canvas();
+    if (star)
+    {
+        // Diamante: |dx|/rx + |dy|/ry <= 1, con el borde del color del carril. Los umbrales se calculan
+        // antes del bucle: dentro solo hay multiplicaciones de 16 bits
+        const u16 rx = 30 * sc / 10, ry = 15 * sc / 10;
+        const u32 edge = (u32) rx * ry, outline = edge * 27 / 32, lane = edge * 2 / 3, shine = edge / 4;
+        const s16 dark = 3 * sc / 10;
+        for (s16 y = 0; y < 16; y++)
+        {
+            const s16 dy = 2 * y - 15;
+            const u32 dy_part = (u32) (u16) abs(dy) * rx;
+            for (s16 x = 0; x < 32; x++)
+            {
+                const u32 d = (u32) (u16) abs(2 * x - 31) * ry + dy_part;
+                if (d > edge) continue;
+                u8 c = P1_STAR;
+                if (d > outline) c = P1_OUTLINE;
+                else if (d > lane) c = P1_LANE;
+                else if (dy > dark) c = P1_STAR_DK;
+                else if (d < shine && dy < 0) c = P1_WHITE;
+                canvas[y][x] = c;
+            }
+        }
+        return;
+    }
+    const u16 rx = 29 * sc / 10, ry = 14 * sc / 10;
+    const u16 inv_x = 65536 / (rx * rx), inv_y = 65536 / (ry * ry);
+    const u16 hx = 12 * sc / 10, hy = max(2, 5 * sc / 10);
+    const u16 hinv_x = 65536 / (hx * hx), hinv_y = 65536 / (hy * hy);
+    const s16 ox = 5 * sc / 10, oy = 2 * sc / 10, dark = 5 * sc / 10;
     for (s16 y = 0; y < 16; y++)
         for (s16 x = 0; x < 32; x++)
         {
-            if (star)
-            {
-                // Diamante: |dx|/rx + |dy|/ry <= 1, con el borde del color del carril
-                const s16 dx = abs(2 * x - 31), dy = abs(2 * y - 15);
-                const s16 d = dx * 15 + dy * 30;          // 450 = el borde (rx = 30, ry = 15)
-                if (d > 450) continue;
-                u8 c = P1_STAR;
-                if (d > 380) c = P1_OUTLINE;
-                else if (d > 300) c = P1_LANE;
-                else if (y > 9) c = P1_STAR_DK;
-                else if (d < 100 && y < 7) c = P1_WHITE;
-                canvas[y][x] = c;
-            }
-            else
-            {
-                const s32 d = ellipse(x, y, 29, 14);
-                if (d > 256) continue;
-                u8 c = P1_LANE;
-                if (d > 190) c = P1_OUTLINE;
-                else if (y >= 10) c = P1_DARK;
-                else if (ellipse(x + 5, y + 2, 12, 5) < 256) c = P1_WHITE;
-                canvas[y][x] = c;
-            }
+            const s32 d = ellipse_inv(x, y, inv_x, inv_y);
+            if (d > 256) continue;
+            u8 c = P1_LANE;
+            if (d > 190) c = P1_OUTLINE;
+            else if (2 * y - 15 >= dark) c = P1_DARK;
+            else if (ellipse_inv(x + ox, y + oy, hinv_x, hinv_y) < 256) c = P1_WHITE;
+            canvas[y][x] = c;
         }
 }
 
@@ -194,28 +224,19 @@ static void tile_hline(u32 *t, u16 y, u8 c)
     for (u16 x = 0; x < 8; x++) tile_px(t, x, y, c);
 }
 
-// --- Capa que se desplaza (plano A): líneas de tiempo y colas -----------------------------------------
+// --- Capa que se desplaza (plano A): las líneas de tiempo ------------------------------------------------
 //
-// Cada carril mide 4 tiles. La cola de una nota sostenida va al centro (la mitad derecha del tile 1 y
-// la izquierda del tile 2). Las líneas de tiempo cruzan todo el carril y pueden caer en cualquier
-// renglón del tile, así que hay un tile por renglón:
+// Con la perspectiva, a lo lejos cada línea de pantalla salta varios píxeles del mundo: una línea de 1
+// píxel aparecería y desaparecería. Por eso la de tiempo mide 2 y la de compás 3. Pueden caer en
+// cualquier renglón del tile, así que hay un tile por renglón:
 //
-//   tile_scroll + 0..7     línea de tiempo (gris) en el renglón 0..7
-//   tile_scroll + 8..15    línea de compás (blanca) en el renglón 0..7
-//   tile_scroll + 16 + (carril * 2 + lado) * 17 + v
-//                          cola del carril (lado 0 = tile 1, lado 1 = tile 2); v = 0 sin línea,
-//                          1..8 con línea de tiempo en el renglón v-1, 9..16 con línea de compás
+//   tile_scroll + 0..7     línea de tiempo (gris) desde el renglón 0..7
+//   tile_scroll + 8..15    línea de compás (blanca) desde el renglón 0..7
 
-#define SCROLL_TAILS 16
-#define TAIL_VARIANTS 17
-
-u16 scroll_tile(u16 lane, u16 col, u16 tail, u16 line, u16 row)
+u16 scroll_tile(u16 line, u16 row)
 {
     // line: 0 = nada, 1 = tiempo, 2 = compás; row: renglón de la línea dentro del tile
-    const u16 v = line ? (line - 1) * 8 + row + 1 : 0;
-    if (tail && (col == 1 || col == 2))
-        return tile_scroll + SCROLL_TAILS + (lane * 2 + col - 1) * TAIL_VARIANTS + v;
-    return v ? tile_scroll + v - 1 : 0;
+    return line ? tile_scroll + (line - 1) * 8 + row : 0;
 }
 
 static void make_scroll_tiles(void)
@@ -225,29 +246,36 @@ static void make_scroll_tiles(void)
     for (u16 kind = 0; kind < 2; kind++)
         for (u16 row = 0; row < 8; row++)
         {
+            const u16 thick = kind ? 3 : 2;
+            const u16 first = min(row, 8 - thick);
             tile_clear(t);
-            t[row] = 0x11111111UL * (kind ? P1_WHITE : P1_GRAY);
+            for (u16 y = first; y < first + thick; y++)
+                t[y] = 0x11111111UL * (kind ? P1_WHITE : P1_GRAY);
             load(t, 1);
         }
-    // La cola mide 8 píxeles, centrada en el carril: la mitad derecha del tile 1 (borde oscuro a la
-    // izquierda) y la izquierda del tile 2 (borde a la derecha). Se arma renglón por renglón con máscaras.
-    for (u16 lane = 0; lane < NUM_LANES; lane++)
-        for (u16 side = 0; side < 2; side++)
+}
+
+// Colas de las notas sostenidas: sprites de 8x16 (dos tiles iguales) en 3 anchos (8, 6 y 4 píxeles)
+// por carril, que se apilan a lo largo de la cola y se angostan a lo lejos
+static void make_tail_tiles(void)
+{
+    u32 t[8];
+    tile_tail = next_tile;
+    for (u16 w = 0; w < 3; w++)
+        for (u16 lane = 0; lane < NUM_LANES; lane++)
         {
-            const u32 base = P1_LANE + lane, dark = P1_DARK + lane;
-            const u32 tail = side ? (base << 28 | base << 24 | base << 20 | dark << 16)
-                                  : (dark << 12 | base << 8 | base << 4 | base);
-            const u32 mask = side ? 0xFFFF0000UL : 0x0000FFFFUL;
-            for (u16 v = 0; v < TAIL_VARIANTS; v++)
+            const u16 width = 8 - 2 * w, first = w;
+            u32 row = 0;
+            for (u16 x = 0; x < 8; x++)
             {
-                for (u16 y = 0; y < 8; y++) t[y] = tail;
-                if (v)
-                {
-                    const u32 line = 0x11111111UL * (v > 8 ? P1_WHITE : P1_GRAY);
-                    t[(v - 1) & 7] = (line & ~mask) | tail;
-                }
-                load(t, 1);
+                u32 c = 0;
+                if (x >= first && x < first + width)
+                    c = (x == first || x == first + width - 1) ? P1_DARK + lane : P1_LANE + lane;
+                row = (row << 4) | c;
             }
+            for (u16 y = 0; y < 8; y++) t[y] = row;
+            load(t, 1);
+            load(t, 1);
         }
 }
 
@@ -295,22 +323,22 @@ void gfx_init(void)
         load(t, 1);
     }
 
-    // Autopista (plano B, PAL0): relleno oscuro (1), relleno con la línea del carril (2) a la izquierda,
-    // y el borde derecho de la autopista (solo la línea)
-    tile_hwy = next_tile;
-    for (u16 y = 0; y < 8; y++) t[y] = 0x11111111;
-    load(t, 1);
-    for (u16 y = 0; y < 8; y++) t[y] = 0x21111111;
-    load(t, 1);
-    for (u16 y = 0; y < 8; y++) t[y] = 0x20000000;
-    load(t, 1);
-
     make_scroll_tiles();
+    make_tail_tiles();
 
-    draw_gem(FALSE);
-    tile_gem = load_lanes();
-    draw_gem(TRUE);
-    tile_star_gem = load_lanes();
+    // Gemas: tile_gem + (escala * NUM_LANES + carril) * 8
+    tile_gem = next_tile;
+    for (u16 k = 0; k < GEM_SCALES; k++)
+    {
+        draw_gem(FALSE, k);
+        load_lanes();
+    }
+    tile_star_gem = next_tile;
+    for (u16 k = 0; k < GEM_SCALES; k++)
+    {
+        draw_gem(TRUE, k);
+        load_lanes();
+    }
     draw_ring(FALSE);
     tile_ring = load_lanes();
     draw_ring(TRUE);
@@ -332,4 +360,6 @@ void gfx_init(void)
         t[7] = 0;                                         // una línea oscura entre renglones
         load(t, 1);
     }
+
+    perspective_init();
 }

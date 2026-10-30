@@ -66,6 +66,12 @@ void draw_text(VDPPlane plane, const char *text, u16 x, u16 y, u16 pal);
 void draw_text_center(VDPPlane plane, const char *text, u16 y, u16 pal);
 void draw_number(VDPPlane plane, u32 value, u16 digits, u16 x, u16 y, u16 pal);
 
+// Lo mismo, pero por la cola de DMA (se escribe en la siguiente vblank). En el juego no se puede tocar
+// el VDP a media pantalla: la interrupción de cada línea también le escribe (ver perspective.c).
+void queue_text(VDPPlane plane, const char *text, u16 x, u16 y, u16 pal);
+void queue_number(VDPPlane plane, u32 value, u16 digits, u16 x, u16 y, u16 pal);
+void queue_tile(VDPPlane plane, u16 attr, u16 x, u16 y);
+
 // --- Música (music.c) ----------------------------------------------------------------------------
 
 #define MUSIC_NO_LOOP   0xFFFF
@@ -85,11 +91,15 @@ extern const u16 titulo_loop;
 
 void gfx_init(void);
 
+#define GEM_SCALES 7            // tamaños de las gemas (cada uno 10% más chico)
+
+u16 gfx_load_tile(const u32 *data);
+
 extern u16 tile_solid;          // + color (0-15): un tile de un solo color
-extern u16 tile_hwy;            // autopista: relleno, relleno con la línea del carril, borde derecho
-extern u16 tile_scroll;         // capa que se desplaza: ver gfx.c (líneas de tiempo y colas)
-extern u16 tile_gem;            // sprites de 4x2 tiles (8 tiles cada uno), uno por carril
+extern u16 tile_scroll;         // capa que se desplaza: líneas de tiempo (ver gfx.c)
+extern u16 tile_gem;            // sprites de 4x2 tiles (8 tiles cada uno): + (escala * 5 + carril) * 8
 extern u16 tile_star_gem;
+extern u16 tile_tail;           // sprites de 1x2 tiles: + (ancho * 5 + carril) * 2 (anchos 8, 6 y 4)
 extern u16 tile_ring;
 extern u16 tile_ring_on;
 extern u16 tile_flame;          // 4 dibujos de 8 tiles
@@ -97,8 +107,35 @@ extern u16 tile_meter;          // medidor de vida: 3 colores x 9 niveles
 extern u16 tile_starbar;        // barra de poder estelar: 2 colores x 9 niveles
 extern u16 tile_logo;           // + 0..6: los tiles del logo (un color por fila)
 
-// Tiles de la capa que se desplaza (ver gfx.c)
-#define SCROLL_LINE_NONE 0
-u16 scroll_tile(u16 lane, u16 col, u16 tail, u16 line, u16 row);
+// Tile de la capa que se desplaza: line 0 = nada, 1 = tiempo, 2 = compás; row = renglón en el tile
+u16 scroll_tile(u16 line, u16 row);
+
+// --- Perspectiva (perspective.c) -----------------------------------------------------------------
+
+#define SCREEN_LINES    224
+#define HIT_Y           184             // centro de los aros
+#define HWY_TOP         24              // línea de pantalla del fondo de la autopista
+#define HWY_CX          160             // centro de la autopista
+#define VIEW_DEPTH      200             // píxeles del mundo que se ven por delante de los aros
+#define DEPTH_MIN       (-16)           // tablas por profundidad: de un poco detrás de los aros...
+#define DEPTH_MAX       (VIEW_DEPTH + 16)   // ...a un poco más allá del fondo
+#define STRIP_ROW       24              // la franja fija de abajo (ventana) empieza en este renglón
+
+extern s16 line_depth[SCREEN_LINES + 1];    // profundidad que muestra cada línea de pantalla
+extern u16 line_scale[SCREEN_LINES + 1];    // escala (8.8) de cada línea
+extern u8 depth_y[DEPTH_MAX - DEPTH_MIN + 1];       // línea de pantalla de cada profundidad
+extern u16 depth_scale[DEPTH_MAX - DEPTH_MIN + 1];  // y su escala (8.8)
+extern u16 trap_map[STRIP_ROW][40];         // el fondo en trapecio, listo para el plano B
+
+void perspective_init(void);
+void perspective_start(void);               // enciende la interrupción de cada línea
+void perspective_stop(void);
+void perspective_set_scroll(u32 world_now); // el desplazamiento del siguiente cuadro
+
+// Centro del carril (en píxeles) a una escala dada
+static inline s16 lane_x(u16 lane, u16 scale)
+{
+    return HWY_CX + (((s32) (2 * lane - 4) * 16 * scale) >> 8);
+}
 
 #endif

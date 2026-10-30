@@ -1,17 +1,19 @@
 // El juego: la autopista, las notas, el juicio de cada botón y el marcador.
 //
-// Cómo se ve:
-//   - Plano B: el escenario y el fondo de la autopista (5 carriles de 32 px, de x = 80 a 240). No se mueve.
-//   - Plano A: lo que baja con la canción (líneas de tiempo y colas de las notas sostenidas). Usa el
-//     scroll vertical por columnas del VDP: las 10 columnas de la autopista se desplazan y las de los
-//     lados no, así que ahí van textos fijos (instrumento, medidor de vida).
-//   - Sprites: las gemas (en su posición exacta, píxel por píxel), los aros y las llamaradas.
-//   - Ventana: la franja fija de abajo (barra estelar, puntaje, combo). Tapa al plano A; debajo, en el
-//     plano B, va su fondo oscuro.
+// Cómo se ve (la autopista va en perspectiva: ver perspective.c):
+//   - Plano B: el escenario, el fondo de la autopista en trapecio y los textos de los lados. No se mueve.
+//   - Plano A: las líneas de tiempo, que bajan con la canción. La interrupción de cada línea elige qué
+//     renglón del mundo se ve en cada línea de pantalla.
+//   - Sprites: las gemas (del tamaño que toca a su distancia), las colas, los aros y las llamaradas.
+//   - Ventana: la franja fija de abajo (barra estelar, puntaje, combo).
 //
 // El tiempo es el cuadro de la canción (`now`, contando la entrada de la autopista). Cada cuadro la
-// autopista baja `speed` píxeles (en 8.8; depende de la dificultad, como en NESBand). Una nota del
-// cuadro f está a la altura del mundo wy(f) = f * speed, y se ve en y = HIT_Y - (wy(f) - wy(now)).
+// autopista avanza `speed` píxeles del mundo (en 8.8; depende de la dificultad, como en NESBand). Una
+// nota del cuadro f está a la distancia del mundo wy(f) = f * speed, y a la profundidad
+// d = wy(f) - wy(now) por delante de los aros; las tablas de perspective.c dicen dónde se ve y de qué tamaño.
+//
+// Mientras se juega no se escribe directo en el VDP (textos, paleta): todo va por la cola de DMA, porque
+// la interrupción de cada línea también le escribe.
 //
 // Las notas del chart se leen poco antes de que entren a la pantalla y viven en una cola circular
 // (`gems`) hasta que pasan; ahí se juzgan y de ahí se dibujan.
@@ -21,8 +23,6 @@
 #define HWY_X           80
 #define HWY_COL         (HWY_X / 8)
 #define LANE_W          32
-#define HIT_Y           184             // centro de los aros
-#define STRIP_ROW       24              // la ventana (franja fija) empieza en este renglón
 #define HIT_WINDOW      6               // tolerancia: +-6 cuadros (~100 ms) para acertar
 #define GEM_SLOTS       64              // notas leídas a la vez (potencia de 2)
 #define MAX_SPRITES     80
@@ -97,6 +97,7 @@ static bool star_active;
 static bool phrase_active, phrase_ok, phrase_pending;
 static u8 hold_lanes;
 static u16 hold_end[NUM_LANES];
+static Gem *hold_gem[NUM_LANES];
 static u16 hold_timer;
 static u8 fx[NUM_LANES];
 static u16 channels;            // canales del instrumento (se callan al fallar)
@@ -110,7 +111,7 @@ static u16 hud_dirty;
 #define HUD_LIFE  8
 
 static u16 row_buf[NUM_LANES * 4];
-static s16 vscroll[20];
+static u16 hwy_color;           // color de la autopista (cambia con el poder estelar)
 
 static inline Gem *gem(u16 n)
 {
@@ -137,7 +138,7 @@ static void phrase_finish(void)
 
 static void decode(void)
 {
-    const u32 limit = wy(now) + HIT_Y + 24;
+    const u32 limit = wy(now) + VIEW_DEPTH + 24;
     while (!chart_done && gem_tail - gem_head < GEM_SLOTS)
     {
         const u16 frame = chart_frame + chart[0];
@@ -213,7 +214,7 @@ static void resolve_gems(void)
         Gem *g = gem(gem_head);
         const u16 last = (g->flags & CHART_SUSTAIN) ? g->end : g->frame;
         if ((g->flags & CHART_SUSTAIN) && !g->end) break;
-        if (wy(now) - wy(last) < (224 - HIT_Y) + 16 || last > now) break;
+        if (wy(now) - wy(last) < (u32) -DEPTH_MIN || last > now) break;
         gem_head++;
     }
 }
@@ -239,7 +240,7 @@ static void lose_life(u16 amount)
         failed = TRUE;
         fail_timer = FAIL_DELAY;
         set_muted(TRUE);
-        draw_text(WINDOW, "        FALLASTE        ", 8, 27, PAL3);
+        queue_text(WINDOW, "        FALLASTE        ", 8, 27, PAL3);
     }
 }
 
@@ -281,6 +282,7 @@ static void hit(Gem *g, u16 lane)
     {
         hold_lanes |= 1 << lane;
         hold_end[lane] = g->end ? g->end : 0xFFFF;
+        hold_gem[lane] = g;
     }
     hud_dirty |= HUD_SCORE | HUD_COMBO | HUD_LIFE;
 }
@@ -346,7 +348,8 @@ static void judge(void)
     {
         star_active = TRUE;
         star_drain = 0;
-        PAL_setColor(1, RGB24_TO_VDPCOLOR(0x101878));
+        hwy_color = RGB24_TO_VDPCOLOR(0x101878);
+        PAL_setColors(1, &hwy_color, 1, DMA_QUEUE);
         hud_dirty |= HUD_STAR;
     }
     if (star_active && ++star_drain >= STAR_DRAIN)
@@ -356,7 +359,8 @@ static void judge(void)
         if (!star_energy)
         {
             star_active = FALSE;
-            PAL_setColor(1, RGB24_TO_VDPCOLOR(0x080838));
+            hwy_color = RGB24_TO_VDPCOLOR(0x080838);
+            PAL_setColors(1, &hwy_color, 1, DMA_QUEUE);
         }
         hud_dirty |= HUD_STAR;
     }
@@ -366,12 +370,11 @@ static void judge(void)
 
 // --- Dibujo ----------------------------------------------------------------------------------------
 
-// Un renglón del mundo (8 píxeles de alto) del plano A: líneas de tiempo y colas
+// Un renglón del mundo (8 píxeles de alto) del plano A: la línea de tiempo que caiga en él, si hay
 static void build_row(u16 k)
 {
     const u32 top = (u32) k * 8;            // el renglón cubre wy de top a top + 7
 
-    // Línea de tiempo que cae en este renglón, si hay
     u16 line = 0, line_row = 0;
     for (;;)
     {
@@ -391,34 +394,18 @@ static void build_row(u16 k)
         break;
     }
 
-    // Colas que pasan por este renglón
-    u8 tails = 0;
-    for (u16 n = gem_head; n != gem_tail; n++)
-    {
-        Gem *g = gem(n);
-        if (!(g->flags & CHART_SUSTAIN)) continue;
-        const u32 start = wy(g->frame);
-        if (start >= top + 8) break;
-        if (!g->end || wy(g->end) >= top) tails |= g->mask;
-    }
-
-    for (u16 lane = 0; lane < NUM_LANES; lane++)
-        for (u16 col = 0; col < 4; col++)
-        {
-            const u16 t = scroll_tile(lane, col, (tails >> lane) & 1, line, line_row);
-            row_buf[lane * 4 + col] = t ? TILE_ATTR_FULL(PAL1, 0, 0, 0, t) : 0;
-        }
+    const u16 t = scroll_tile(line, line_row);
+    const u16 attr = t ? TILE_ATTR_FULL(PAL1, 0, 0, 0, t) : 0;
+    for (u16 i = 0; i < NUM_LANES * 4; i++) row_buf[i] = attr;
     VDP_setTileMapDataRow(BG_A, row_buf, (-(s16) k - 1) & 31, HWY_COL, NUM_LANES * 4, DMA_QUEUE_COPY);
 }
 
 static void scroll_highway(void)
 {
     const u32 world_now = wy(now);
-    while ((u32) next_row * 8 <= world_now + HIT_Y + 8)
+    while ((u32) next_row * 8 <= world_now + VIEW_DEPTH + 16)
         build_row(next_row++);
-    const s16 v = (-1 - HIT_Y - (s32) world_now) & 0x3FF;
-    for (u16 c = HWY_COL / 2; c < HWY_COL / 2 + NUM_LANES * 2; c++) vscroll[c] = v;
-    VDP_setVerticalScrollTile(BG_A, 0, vscroll, 20, DMA_QUEUE);
+    perspective_set_scroll(world_now);
 }
 
 static bool phrase_failed_at(u16 n)
@@ -429,11 +416,37 @@ static bool phrase_failed_at(u16 n)
 
 static u16 sprites;
 
-static void sprite(s16 x, s16 y, u16 attr)
+static void sprite(s16 x, s16 y, u8 size, u16 attr)
 {
     if (sprites >= MAX_SPRITES) return;
-    VDP_setSpriteFull(sprites, x, y, SPRITE_SIZE(4, 2), attr, sprites + 1);
+    VDP_setSpriteFull(sprites, x, y, size, attr, sprites + 1);
     sprites++;
+}
+
+// Profundidad (píxeles del mundo por delante de los aros) del cuadro f
+static inline s32 depth(u16 frame, u32 world_now)
+{
+    return (s32) wy(frame) - (s32) world_now;
+}
+
+// La cola de una nota sostenida, de la profundidad d0 a la d1: sprites de 8x16 apilados, cada uno
+// centrado en su carril y del ancho que toca a su altura
+static void draw_tail(u16 lane, s32 d0, s32 d1)
+{
+    d0 = max(d0, DEPTH_MIN);
+    d1 = min(d1, VIEW_DEPTH);
+    if (d1 <= d0) return;
+    s16 y = min(depth_y[d0 - DEPTH_MIN], HIT_Y + 7);
+    const s16 top = depth_y[d1 - DEPTH_MIN];
+    while (y - top >= 4 && sprites < MAX_SPRITES - NUM_LANES)
+    {
+        const s16 h = (y - top >= 12) ? 16 : 8;
+        const u16 scale = line_scale[y - h / 2];
+        const u16 w = scale > 205 ? 0 : (scale > 140 ? 1 : 2);
+        sprite(lane_x(lane, scale) - 4, y - h, h == 16 ? SPRITE_SIZE(1, 2) : SPRITE_SIZE(1, 1),
+               TILE_ATTR_FULL(PAL1, 1, 0, 0, tile_tail + (w * NUM_LANES + lane) * 2));
+        y -= h;
+    }
 }
 
 static void draw_sprites(void)
@@ -452,30 +465,55 @@ static void draw_sprites(void)
             frame = (now >> 2) & 1;     // mientras sostienes, la llama alta parpadea
         else
             continue;
-        sprite(HWY_X + lane * LANE_W, HIT_Y - 16,
+        sprite(HWY_X + lane * LANE_W, HIT_Y - 16, SPRITE_SIZE(4, 2),
                TILE_ATTR_FULL(star_active ? PAL3 : PAL2, 1, 0, 0, tile_flame + frame * 8));
     }
-    // Gemas
+    // Gemas, del tamaño que toca a su distancia
     const u32 world_now = wy(now);
     for (u16 n = gem_head; n != gem_tail; n++)
     {
         Gem *g = gem(n);
         const u8 visible = g->mask & ~g->hit;
         if (!visible) continue;
-        const s32 y = HIT_Y - ((s32) wy(g->frame) - (s32) world_now) - 8;
-        if (y > 224 - 40) continue;     // ya pasó (la franja de abajo la taparía de todos modos)
-        if (y < -16) break;
-        const u16 base = (g->flags & CHART_STAR) && !phrase_failed_at(n) ? tile_star_gem : tile_gem;
+        const s32 d = depth(g->frame, world_now);
+        if (d > VIEW_DEPTH) break;
+        if (d < DEPTH_MIN) continue;
+        const s16 y = depth_y[d - DEPTH_MIN];
+        if (y > HIT_Y + 6) continue;    // ya pasó (la franja de abajo empieza poco después)
+        const u16 scale = depth_scale[d - DEPTH_MIN];
+        const u16 k = scale >= 256 ? 0 : min(GEM_SCALES - 1, ((256 - scale) * 10 + 128) >> 8);
+        const u16 base = ((g->flags & CHART_STAR) && !phrase_failed_at(n) ? tile_star_gem : tile_gem) + k * NUM_LANES * 8;
         for (u16 lane = 0; lane < NUM_LANES; lane++)
             if ((visible >> lane) & 1)
-                sprite(HWY_X + lane * LANE_W, y, TILE_ATTR_FULL(PAL1, 0, 0, 0, base + lane * 8));
+                sprite(lane_x(lane, scale) - 16, y - 8, SPRITE_SIZE(4, 2),
+                       TILE_ATTR_FULL(PAL1, 1, 0, 0, base + lane * 8));
+    }
+    // Colas: desde la gema (o desde los aros, mientras la sostienes) hasta su fin
+    for (u16 n = gem_head; n != gem_tail; n++)
+    {
+        Gem *g = gem(n);
+        if (!(g->flags & CHART_SUSTAIN)) continue;
+        const s32 d_start = depth(g->frame, world_now);
+        if (d_start > VIEW_DEPTH) break;
+        const s32 d_end = g->end ? depth(g->end, world_now) : VIEW_DEPTH;
+        for (u16 lane = 0; lane < NUM_LANES; lane++)
+        {
+            if (!((g->mask >> lane) & 1)) continue;
+            if ((g->hit >> lane) & 1)
+            {
+                // Acertada: la cola se va comiendo mientras la sostienes; si la soltaste, ya no se ve
+                if (((hold_lanes >> lane) & 1) && hold_gem[lane] == g) draw_tail(lane, 0, d_end);
+            }
+            else
+                draw_tail(lane, d_start, d_end);
+        }
     }
     // Aros
     for (u16 lane = 0; lane < NUM_LANES; lane++)
     {
         const bool on = joy_held & lane_buttons[lane];
-        sprite(HWY_X + lane * LANE_W, HIT_Y - 8,
-               TILE_ATTR_FULL(PAL1, 0, 0, 0, (on ? tile_ring_on : tile_ring) + lane * 8));
+        sprite(HWY_X + lane * LANE_W, HIT_Y - 8, SPRITE_SIZE(4, 2),
+               TILE_ATTR_FULL(PAL1, 1, 0, 0, (on ? tile_ring_on : tile_ring) + lane * 8));
     }
     VDP_setSpriteLink(sprites - 1, 0);
     VDP_updateSprites(sprites, DMA_QUEUE);
@@ -484,12 +522,12 @@ static void draw_sprites(void)
 static void draw_hud(void)
 {
     if (hud_dirty & HUD_SCORE)
-        draw_number(WINDOW, score, 7, 23, 25, PAL0);
+        queue_number(WINDOW, score, 7, 23, 25, PAL0);
     if (hud_dirty & HUD_COMBO)
     {
-        draw_number(WINDOW, combo, 4, 23, 26, PAL0);
+        queue_number(WINDOW, combo, 4, 23, 26, PAL0);
         char m[3] = { 'X', '0' + multiplier, 0 };
-        draw_text(WINDOW, m, 28, 26, multiplier > 1 ? PAL2 : PAL0);
+        queue_text(WINDOW, m, 28, 26, multiplier > 1 ? PAL2 : PAL0);
     }
     if (hud_dirty & HUD_STAR)
     {
@@ -497,8 +535,8 @@ static void draw_hud(void)
         {
             const s16 fill = (s16) star_energy - i * 8;
             const u16 level = fill <= 0 ? 0 : (fill >= 8 ? 8 : fill);
-            VDP_setTileMapXY(WINDOW, TILE_ATTR_FULL(PAL3, 1, 0, 0, tile_starbar + (star_active ? 9 : 0) + level),
-                             STARBAR_COL + i, STRIP_ROW);
+            queue_tile(WINDOW, TILE_ATTR_FULL(PAL3, 1, 0, 0, tile_starbar + (star_active ? 9 : 0) + level),
+                       STARBAR_COL + i, STRIP_ROW);
         }
     }
     if ((hud_dirty & HUD_LIFE) && !sel.no_fail)
@@ -508,8 +546,8 @@ static void draw_hud(void)
         {
             const s16 fill = (s16) life - (METER_TILES - 1 - i) * 8;
             const u16 level = fill <= 0 ? 0 : (fill >= 8 ? 8 : fill);
-            VDP_setTileMapXY(BG_A, TILE_ATTR_FULL(PAL3, 1, 0, 0, tile_meter + color * 9 + level),
-                             METER_COL, METER_ROW + i);
+            queue_tile(BG_B, TILE_ATTR_FULL(PAL3, 1, 0, 0, tile_meter + color * 9 + level),
+                       METER_COL, METER_ROW + i);
         }
     }
     hud_dirty = 0;
@@ -519,37 +557,32 @@ static void draw_hud(void)
 
 static void draw_stage(void)
 {
-    // Fondo del escenario y la autopista
-    VDP_fillTileMapRect(BG_B, TILE_ATTR_FULL(PAL0, 0, 0, 0, tile_solid + 3), 0, 0, 40, 28);
-    for (u16 lane = 0; lane < NUM_LANES; lane++)
-    {
-        VDP_fillTileMapRect(BG_B, TILE_ATTR_FULL(PAL0, 0, 0, 0, tile_hwy + 1), HWY_COL + lane * 4, 0, 1, STRIP_ROW);
-        VDP_fillTileMapRect(BG_B, TILE_ATTR_FULL(PAL0, 0, 0, 0, tile_hwy), HWY_COL + lane * 4 + 1, 0, 3, STRIP_ROW);
-    }
-    VDP_fillTileMapRect(BG_B, TILE_ATTR_FULL(PAL0, 0, 0, 0, tile_hwy + 2), HWY_COL + NUM_LANES * 4, 0, 1, STRIP_ROW);
+    // El escenario con la autopista en trapecio (lo arma perspective.c); adentro se ve el color de fondo
+    for (u16 row = 0; row < STRIP_ROW; row++)
+        VDP_setTileMapDataRow(BG_B, trap_map[row], row, 0, 40, CPU);
+    VDP_setBackgroundColor(1);
     // Bocinas a los lados: cajas oscuras con dos conos
     for (u16 side = 0; side < 2; side++)
     {
         const u16 x = side ? 35 : 1;
-        VDP_fillTileMapRect(BG_B, TILE_ATTR_FULL(PAL0, 0, 0, 0, tile_solid + 11), x, 13, 4, 11);
-        VDP_fillTileMapRect(BG_B, TILE_ATTR_FULL(PAL0, 0, 0, 0, tile_solid + 9), x + 1, 14, 2, 3);
-        VDP_fillTileMapRect(BG_B, TILE_ATTR_FULL(PAL0, 0, 0, 0, tile_solid + 10), x + 1, 15, 2, 1);
-        VDP_fillTileMapRect(BG_B, TILE_ATTR_FULL(PAL0, 0, 0, 0, tile_solid + 9), x + 1, 19, 2, 3);
-        VDP_fillTileMapRect(BG_B, TILE_ATTR_FULL(PAL0, 0, 0, 0, tile_solid + 10), x + 1, 20, 2, 1);
+        VDP_fillTileMapRect(BG_B, TILE_ATTR_FULL(PAL0, 1, 0, 0, tile_solid + 11), x, 13, 4, 11);
+        VDP_fillTileMapRect(BG_B, TILE_ATTR_FULL(PAL0, 1, 0, 0, tile_solid + 9), x + 1, 14, 2, 3);
+        VDP_fillTileMapRect(BG_B, TILE_ATTR_FULL(PAL0, 1, 0, 0, tile_solid + 10), x + 1, 15, 2, 1);
+        VDP_fillTileMapRect(BG_B, TILE_ATTR_FULL(PAL0, 1, 0, 0, tile_solid + 9), x + 1, 19, 2, 3);
+        VDP_fillTileMapRect(BG_B, TILE_ATTR_FULL(PAL0, 1, 0, 0, tile_solid + 10), x + 1, 20, 2, 1);
         // Un haz de luz desde arriba
         for (u16 y = 0; y < 10; y++)
-            VDP_fillTileMapRect(BG_B, TILE_ATTR_FULL(PAL0, 0, 0, 0, tile_solid + 4), side ? x - y / 4 : x + 1 + y / 4, y, 2, 1);
+            VDP_fillTileMapRect(BG_B, TILE_ATTR_FULL(PAL0, 1, 0, 0, tile_solid + 4), side ? x - y / 4 : x + 1 + y / 4, y, 2, 1);
     }
-    // La franja fija de abajo: su fondo en el plano B (con prioridad, para tapar las gemas que ya pasaron)
-    // y los textos en la ventana
+    // La franja fija de abajo: su fondo en el plano B y los textos en la ventana
     VDP_fillTileMapRect(BG_B, TILE_ATTR_FULL(PAL0, 1, 0, 0, tile_solid + 11), 0, STRIP_ROW, 40, 4);
     draw_text(WINDOW, "PUNTOS", 14, 25, PAL1);
     draw_text(WINDOW, "COMBO", 14, 26, PAL1);
     draw_text_center(WINDOW, song->title, 27, PAL1);
-    // Los lados (plano A, columnas sin scroll)
-    draw_text(BG_A, instrument_names[sel.instrument], 1, 2, PAL0);
-    draw_text(BG_A, difficulty_names[sel.difficulty], 1, 3, PAL1);
-    if (!sel.no_fail) draw_text(BG_A, "VIDA", METER_COL, METER_ROW - 1, PAL1);
+    // Los lados (plano B)
+    draw_text(BG_B, instrument_names[sel.instrument], 1, 2, PAL0);
+    draw_text(BG_B, difficulty_names[sel.difficulty], 1, 3, PAL1);
+    if (!sel.no_fail) draw_text(BG_B, "VIDA", METER_COL, METER_ROW - 1, PAL1);
 }
 
 // --- Pausa -----------------------------------------------------------------------------------------
@@ -558,7 +591,7 @@ static void draw_stage(void)
 static bool pause_loop(void)
 {
     music_pause(TRUE);
-    draw_text(WINDOW, "PAUSA: START SIGUE, B SALE", 7, 27, PAL2);
+    queue_text(WINDOW, "      PAUSA: START SIGUE, B SALE      ", 1, 27, PAL2);
     for (;;)
     {
         wait_frame();
@@ -567,11 +600,12 @@ static bool pause_loop(void)
         if (joy_pressed & BUTTON_B)
         {
             music_stop();
+            perspective_stop();
             return TRUE;
         }
     }
-    VDP_clearTextLineBG(WINDOW, 27);
-    draw_text_center(WINDOW, song->title, 27, PAL1);
+    queue_text(WINDOW, "                                      ", 1, 27, PAL1);
+    queue_text(WINDOW, song->title, (40 - strlen(song->title)) / 2, 27, PAL1);
     music_pause(FALSE);
     return FALSE;
 }
@@ -616,7 +650,8 @@ static void start(void)
     channels = song->channels[sel.instrument];
     muted = FALSE;
     paused = FALSE;
-    memset(vscroll, 0, sizeof(vscroll));
+    hwy_color = RGB24_TO_VDPCOLOR(0x080838);
+    PAL_setColors(1, &hwy_color, 1, CPU);
     hud_dirty = HUD_SCORE | HUD_COMBO | HUD_STAR | HUD_LIFE;
 }
 
@@ -641,10 +676,10 @@ Screen play_run(void)
     screen_reset();
     start();
     VDP_setEnable(FALSE);
-    VDP_setScrollingMode(HSCROLL_PLANE, VSCROLL_COLUMN);
     VDP_setWindowVPos(TRUE, STRIP_ROW);
     draw_stage();
     VDP_setEnable(TRUE);
+    perspective_start();
 
     for (;;)
     {
@@ -671,6 +706,7 @@ Screen play_run(void)
         wait_frame();
     }
     music_stop();
+    perspective_stop();
     finish();
     return SCREEN_RESULTS;
 }
