@@ -4,11 +4,12 @@ Un juego de ritmo estilo Guitar Hero / Rock Band para la Sega Genesis / Mega Dri
 [NESBand](https://github.com/Xalcker/NESBand): las mismas reglas y el mismo generador de charts, pero con
 el sonido FM del YM2612 y la música importada de archivos VGM.
 
-**Estado actual (v0.2.0):** título con su música, menú (canción, instrumento, dificultad,
+**Estado actual (v0.3.0):** título con su música, menú (canción, instrumento, dificultad,
 fallo), juego para **1 o 2 jugadores** (VS y Co-Op) con pausa, notas sostenidas, frases de poder estelar, medidor de vida, y
 pantalla de resultados con precisión, combo máximo y estrellas. Los charts se generan automáticamente para
 guitarra, teclado y bajo en 4 dificultades, y si fallas tu instrumento se calla hasta tu siguiente acierto,
-como en Rock Band, y la autopista va en perspectiva.
+como en Rock Band, y la autopista va en perspectiva. El editor de charts toca la canción en el navegador
+(Escuchar).
 
 **Canciones:** las diez originales de NESBand (GPL-2.0-or-later), arregladas para FM: *Primer Ensayo*,
 *Tormenta de Neón* (rock, guitarra), *Luz de Luna* (balada, teclado), *Salto Mortal* (funk, bajo), *Marcha
