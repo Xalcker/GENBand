@@ -22,7 +22,6 @@
 
 #define HWY_X           80
 #define HWY_COL         (HWY_X / 8)
-#define LANE_W          32
 #define HIT_WINDOW      6               // tolerancia: +-6 cuadros (~100 ms) para acertar
 #define GEM_SLOTS       64              // notas leídas a la vez (potencia de 2)
 #define MAX_SPRITES     80
@@ -78,12 +77,27 @@ typedef struct {
     u16 frame;
     u16 end;                    // cuadro en que termina la cola (0 = sin cola o aún sin leer su fin)
     u8 mask;                    // carriles
-    u8 flags;                   // CHART_SUSTAIN, CHART_STAR
+    u8 flags;                   // CHART_SUSTAIN, CHART_STAR, GEM_CYMBAL
     u8 hit;                     // carriles acertados
     u8 missed;                  // carriles perdidos
 } Gem;
 
+#define GEM_CYMBAL 0x80          // batería: el pad es un platillo (en el chart es el bit de la cola, $40)
+#define KICK       4             // batería: el bombo es el carril naranja
+
 static Gem gems[GEM_SLOTS];
+
+// Geometría de la autopista: 5 carriles de 32 px, o en la batería 4 columnas de 40 px en el orden de Rock
+// Band (rojo, amarillo, azul, verde) y el bombo como una barra que las cruza
+static bool drums;
+static u16 cols, col_w;
+static u8 lane_col[NUM_LANES];          // la columna de cada carril (el bombo no tiene)
+static const u8 drum_cols[NUM_LANES] = { 3, 0, 1, 2, 0 };
+
+static inline s16 col_x(u16 col, u16 scale)
+{
+    return HWY_CX + (((s32) (2 * col + 1 - cols) * (col_w / 2) * scale) >> 8);
+}
 static u16 gem_head, gem_tail;  // números de la nota más vieja y de la siguiente por leer (la casilla es & 63)
 static u16 resolve;             // siguiente nota por resolver (para las frases estelares, en orden)
 
@@ -133,6 +147,8 @@ static u16 hwy_color;           // color de la autopista (cambia con el poder es
 static u16 miss_fx;             // cuadros que le quedan al efecto de fallo (y a su enfriamiento)
 static u16 miss_sound;          // el último sonido de fallo (0-2)
 static s16 shake[2];            // scroll horizontal de los planos A y B (el temblor al fallar)
+
+static void rebuild_kick(const Gem *g);
 
 static inline Gem *gem(u16 n)
 {
@@ -197,7 +213,8 @@ static void decode(void)
             g->frame = frame;
             g->end = 0;
             g->mask = mask & CHART_LANES;
-            g->flags = mask & (CHART_SUSTAIN | CHART_STAR);
+            g->flags = drums ? (mask & CHART_STAR) | ((mask & CHART_SUSTAIN) ? GEM_CYMBAL : 0)
+                             : mask & (CHART_SUSTAIN | CHART_STAR);
             g->hit = g->missed = 0;
             if (phrase_pending)
             {
@@ -340,7 +357,13 @@ static void hit(Gem *g, u16 lane)
     // Un acorde suma la vida de una sola nota aunque lleves dos botones (si no, se regalaría)
     if (!failed && !(g->hit & ~(1 << lane))) life = min(LIFE_MAX, life + LIFE_HIT);
     set_muted(FALSE);
-    fx[lane] = FX_FRAMES;
+    if (drums && lane == KICK)
+    {
+        for (u16 c = 0; c < cols; c++) fx[c] = FX_FRAMES;   // el bombo: llamarada en todas las columnas
+        rebuild_kick(g);
+    }
+    else
+        fx[lane_col[lane]] = FX_FRAMES;
     if ((g->flags & CHART_SUSTAIN) && (!g->end || g->end > now))
     {
         hold_lanes |= 1 << lane;
@@ -434,34 +457,47 @@ static void judge(void)
 
 // --- Dibujo ----------------------------------------------------------------------------------------
 
-// Un renglón del mundo (8 píxeles de alto) del plano A: la línea de tiempo que caiga en él, si hay
+// Un renglón del mundo (8 píxeles de alto) del plano A: la línea de tiempo que caiga en él, si hay, o la
+// barra de un bombo de la batería que aún no se tocó
 static void build_row(u16 k)
 {
     const u32 top = (u32) k * 8;            // el renglón cubre wy de top a top + 7
 
     u16 line = 0, line_row = 0;
-    for (;;)
+    // La primera línea de tiempo en o después de top (sin estado: el renglón se puede volver a armar)
+    const u32 first = (top * 256 + speed - 1) / speed;
+    const u16 n = first > beat_zero ? (first - beat_zero + song->beat_frames - 1) / song->beat_frames : 0;
+    const u16 frame = beat_zero + n * song->beat_frames;
+    if (frame < song->end_frame && wy(frame) < top + 8)
     {
-        const u16 frame = beat_zero + beat_index * song->beat_frames;
-        if (frame >= song->end_frame) break;
-        const u32 y = wy(frame);
-        if (y < top)
-        {
-            beat_index++;
-            continue;
-        }
-        if (y < top + 8)
-        {
-            line = ((beat_index + 4 - bar_phase) % 4 == 0) ? 2 : 1;
-            line_row = 7 - (y - top);
-        }
-        break;
+        line = ((n + 4 - bar_phase) % 4 == 0) ? 2 : 1;
+        line_row = 7 - (wy(frame) - top);
     }
+    if (drums)
+        for (u16 i = gem_head; i != gem_tail; i++)
+        {
+            const Gem *g = gem(i);
+            if (!((g->mask >> KICK) & 1) || ((g->hit >> KICK) & 1)) continue;   // (uno fallado sigue de largo)
+            const u32 y = wy(g->frame);
+            if (y >= top + 8) break;
+            if (y >= top)
+            {
+                line = 3;
+                line_row = min(7 - (y - top), 5);   // (la barra mide 4: que quede centrada en su cuadro)
+            }
+        }
 
     const u16 t = scroll_tile(line, line_row);
     const u16 attr = t ? TILE_ATTR_FULL(PAL1, 0, 0, 0, t) : 0;
     for (u16 i = 0; i < NUM_LANES * 4; i++) row_buf[i] = attr;
     VDP_setTileMapDataRow(BG_A, row_buf, (-(s16) k - 1) & 31, HWY_COL, NUM_LANES * 4, DMA_QUEUE_COPY);
+}
+
+// Al tocar un bombo, su barra desaparece: se vuelve a armar su renglón
+static void rebuild_kick(const Gem *g)
+{
+    const u16 k = wy(g->frame) / 8;
+    if (k < next_row) build_row(k);
 }
 
 static void scroll_highway(void)
@@ -507,7 +543,7 @@ static void draw_tail(u16 lane, s32 d0, s32 d1)
         const s16 h = (y - top >= 12) ? 16 : 8;
         const u16 scale = line_scale[y - h / 2];
         const u16 w = scale > 205 ? 0 : (scale > 140 ? 1 : 2);
-        sprite(lane_x(lane, scale) - 4, y - h, h == 16 ? SPRITE_SIZE(1, 2) : SPRITE_SIZE(1, 1),
+        sprite(col_x(lane_col[lane], scale) - 4, y - h, h == 16 ? SPRITE_SIZE(1, 2) : SPRITE_SIZE(1, 1),
                TILE_ATTR_FULL(PAL1, 1, 0, 0, tile_tail + (w * NUM_LANES + lane) * 2));
         y -= h;
     }
@@ -516,20 +552,20 @@ static void draw_tail(u16 lane, s32 d0, s32 d1)
 static void draw_sprites(void)
 {
     sprites = 0;
-    // Llamaradas (encima de todo)
-    for (u16 lane = 0; lane < NUM_LANES; lane++)
+    // Llamaradas (encima de todo), por columna
+    for (u16 col = 0; col < cols; col++)
     {
         u16 frame;
-        if (fx[lane])
+        if (fx[col])
         {
-            frame = (FX_FRAMES - fx[lane]) / 2;
-            fx[lane]--;
+            frame = (FX_FRAMES - fx[col]) / 2;
+            fx[col]--;
         }
-        else if ((hold_lanes >> lane) & 1)
+        else if (!drums && ((hold_lanes >> col) & 1))
             frame = (now >> 2) & 1;     // mientras sostienes, la llama alta parpadea
         else
             continue;
-        sprite(HWY_X + lane * LANE_W, HIT_Y - 16, SPRITE_SIZE(4, 2),
+        sprite(col_x(col, 256) - 16, HIT_Y - 16, SPRITE_SIZE(4, 2),
                TILE_ATTR_FULL(star_active ? PAL3 : PAL2, 1, 0, 0, tile_flame + frame * 8));
     }
     // Gemas, del tamaño que toca a su distancia
@@ -546,10 +582,12 @@ static void draw_sprites(void)
         if (y > HIT_Y + 6) continue;    // ya pasó (la franja de abajo empieza poco después)
         const u16 scale = depth_scale[d - DEPTH_MIN];
         const u16 k = scale >= 256 ? 0 : min(GEM_SCALES - 1, ((256 - scale) * 10 + 128) >> 8);
-        const u16 base = ((g->flags & CHART_STAR) && !phrase_failed_at(n) ? tile_star_gem : tile_gem) + k * NUM_LANES * 8;
+        u16 base = (g->flags & CHART_STAR) && !phrase_failed_at(n) ? tile_star_gem
+                   : (g->flags & GEM_CYMBAL) ? tile_cymbal : tile_gem;
+        base += k * NUM_LANES * 8;
         for (u16 lane = 0; lane < NUM_LANES; lane++)
-            if ((visible >> lane) & 1)
-                sprite(lane_x(lane, scale) - 16, y - 8, SPRITE_SIZE(4, 2),
+            if (((visible >> lane) & 1) && !(drums && lane == KICK))    // (el bombo va en el plano A)
+                sprite(col_x(lane_col[lane], scale) - 16, y - 8, SPRITE_SIZE(4, 2),
                        TILE_ATTR_FULL(PAL1, 1, 0, 0, base + lane * 8));
     }
     // Colas: desde la gema (o desde los aros, mientras la sostienes) hasta su fin
@@ -575,8 +613,9 @@ static void draw_sprites(void)
     // Aros
     for (u16 lane = 0; lane < NUM_LANES; lane++)
     {
+        if (drums && lane == KICK) continue;
         const bool on = joy_held & lane_buttons[lane];
-        sprite(HWY_X + lane * LANE_W, HIT_Y - 8, SPRITE_SIZE(4, 2),
+        sprite(col_x(lane_col[lane], 256) - 16, HIT_Y - 8, SPRITE_SIZE(4, 2),
                TILE_ATTR_FULL(PAL1, 1, 0, 0, (on ? tile_ring_on : tile_ring) + lane * 8));
     }
     VDP_setSpriteLink(sprites - 1, 0);
@@ -750,6 +789,11 @@ static void practice_setup(void)
 static void start(void)
 {
     song = song_list[sel.song];
+    drums = sel.instrument == INSTR_DRUMS;
+    cols = drums ? 4 : NUM_LANES;
+    col_w = drums ? 40 : 32;
+    for (u16 lane = 0; lane < NUM_LANES; lane++) lane_col[lane] = drums ? drum_cols[lane] : lane;
+    perspective_build(cols, col_w);
     chart = song->charts[sel.instrument][sel.difficulty];
     chart_frame = 0;
     chart_done = FALSE;

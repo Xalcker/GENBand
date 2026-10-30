@@ -73,7 +73,7 @@ local function menu_plan()
     local no_fail = mem:read_u8(sym.sel + 6)
     for _ = 1, (want_song - song) % 64 do tap(field.right) end
     tap(field.down)
-    for _ = 1, (want_instr - instr) % 3 do tap(field.right) end
+    for _ = 1, (want_instr - instr) % 4 do tap(field.right) end
     tap(field.down)
     for _ = 1, (want_diff - diff) % 4 do tap(field.right) end
     tap(field.down)

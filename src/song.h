@@ -5,7 +5,8 @@
 
 #include <genesis.h>
 
-#define NUM_INSTRUMENTS  3      // guitarra, teclado, bajo
+#define NUM_INSTRUMENTS  4      // guitarra, teclado, bajo, batería
+#define INSTR_DRUMS      3
 #define NUM_DIFFICULTIES 4      // fácil, medio, difícil, experto
 
 typedef struct {

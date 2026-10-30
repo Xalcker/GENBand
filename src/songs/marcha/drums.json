@@ -1,0 +1,7 @@
+{
+  "version": 1,
+  "groups": {
+    "fm6:G3": {"lane": "kick", "cymbal": false},
+    "ruido:5": {"lane": "snare", "cymbal": false}
+  }
+}

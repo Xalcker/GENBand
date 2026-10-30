@@ -24,7 +24,8 @@ import zlib
 from pathlib import Path
 
 from . import vgm
-from .chart import DIFFICULTIES, build_chart, chart_buttons, chart_to_c, check_playable, estimate_beat, merge_attacks
+from .chart import DIFFICULTIES, DRUM_BLOCKED_PAIRS, build_chart, chart_buttons, chart_to_c, check_playable, estimate_beat, merge_attacks
+from .drums import DRUMS_FILE, build_drum_chart, drum_groups, drum_hits, load_drums, save_drums, suggest_assignment
 
 ROOT = Path(__file__).resolve().parents[2]
 SONGS_DIR = ROOT / "src" / "songs"
@@ -35,8 +36,10 @@ TEXT_MAX = 26  # caracteres que caben en el menú
 DEFAULT_DURATION = 120  # segundos, si el VGM tiene bucle y no se dice cuánto grabar
 MAX_FRAMES = 65000  # el juego cuenta los cuadros en 16 bits
 
-# Instrumentos en el orden que usa el juego, con su papel en el generador de charts (ver chart.ROLES)
+# Instrumentos en el orden que usa el juego, con su papel en el generador de charts (ver chart.ROLES); la
+# batería tiene su propio generador (drums.py)
 INSTRUMENTS = [("guitarra", "lead"), ("teclado", "keys"), ("bajo", "bass")]
+DRUMS = "bateria"
 # De qué otro instrumento sale la armonía de los acordes
 PARTNER = {"guitarra": "teclado", "teclado": "guitarra"}
 
@@ -94,6 +97,16 @@ def auto_assign(notes: dict[int, list[vgm.Note]]) -> dict[str, list[int]]:
     return out
 
 
+def drum_channels(notes: dict[int, list[vgm.Note]], melodic: set[int]) -> list[int]:
+    """Los canales de batería si no se dijeron: el ruido, y los que casi no cambian de tono (como el bombo FM
+    de las canciones de GENBand) y no son de otro instrumento."""
+    out = [vgm.NOISE] if notes.get(vgm.NOISE) else []
+    for ch, (count, _, distinct) in summarize(notes).items():
+        if ch not in melodic and count >= 20 and distinct < 5:
+            out.append(ch)
+    return sorted(out)
+
+
 def song_hash(title: str, game: str) -> int:
     """Identifica la canción para los récords (no cambia si cambia su lugar en el menú)."""
     return zlib.crc32(f"{title}\n{game}".encode()) & 0xFFFF
@@ -140,6 +153,7 @@ def import_song(opts: dict) -> None:
         if chosen is not None:
             assign[inst] = chosen
     used = {ch for chs in assign.values() for ch in chs}
+    drums = parse_channels(opts.get(DRUMS)) or drum_channels(notes, used)
     onsets = [n.frame for ch, ns in notes.items() if ch in used or ch == vgm.NOISE for n in ns]
     grid = estimate_beat(onsets, opts.get("beat_frames"))
 
@@ -178,6 +192,32 @@ def import_song(opts: dict) -> None:
         mask_c.append(f"0x{sum(1 << ch for ch in chs):04X}")
         report.append(f"  {inst}: {', '.join(vgm.CHANNEL_NAMES[c] for c in chs)} ({', '.join(counts)} notas)")
 
+    # Batería: los golpes de sus canales, con el papel de cada grupo (drums.json; si falta, la sugerencia)
+    folder = SONGS_DIR / name
+    folder.mkdir(parents=True, exist_ok=True)
+    assignment = load_drums(folder) if drums else None
+    if drums and assignment is None:
+        assignment = suggest_assignment(drum_groups(notes, drums))
+        save_drums(folder, assignment)
+    hits = drum_hits(notes, drums, assignment) if drums else []
+    if hits:
+        labels, counts = [], []
+        for diff in DIFFICULTIES:
+            chart = build_drum_chart(hits, diff.name, grid, LEAD_IN)
+            check_playable(chart, DRUM_BLOCKED_PAIRS)
+            label = f"{DRUMS}_{diff.name}"
+            out.append(chart_to_c(label, chart))
+            labels.append(label)
+            counts.append(str(chart_buttons(chart)))
+        charts_c.append("{ " + ", ".join(labels) + " }")
+        buttons_c.append("{ " + ", ".join(counts) + " }")
+        mask_c.append(f"0x{sum(1 << ch for ch in drums):04X}")
+        report.append(f"  {DRUMS}: {', '.join(vgm.CHANNEL_NAMES[c] for c in drums)} ({', '.join(counts)} notas)")
+    else:
+        charts_c.append("{ " + ", ".join(["NULL"] * len(DIFFICULTIES)) + " }")
+        buttons_c.append("{ " + ", ".join(["0"] * len(DIFFICULTIES)) + " }")
+        mask_c.append("0")
+
     out.append(
         f"""const Song song_{name} = {{
     .title = {c_string(title)},
@@ -197,8 +237,6 @@ def import_song(opts: dict) -> None:
 }};
 """
     )
-    folder = SONGS_DIR / name
-    folder.mkdir(parents=True, exist_ok=True)
     (folder / "song.c").write_text("\n".join(out), encoding="utf-8", newline="\n")
     (folder / "import.json").write_text(json.dumps(opts, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
@@ -221,7 +259,7 @@ def cmd_import(args: argparse.Namespace) -> None:
     except ValueError:
         rel = source
     opts = {"name": args.name, "source": str(rel)}
-    for key in ("title", "game", "duration", "beat_frames", "guitarra", "teclado", "bajo"):
+    for key in ("title", "game", "duration", "beat_frames", "guitarra", "teclado", "bajo", DRUMS):
         value = getattr(args, key)
         if value is not None:
             opts[key] = value
@@ -388,6 +426,7 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--beat-frames", type=int, help="cuadros por tiempo, si el tempo detectado sale mal")
     for inst, _ in INSTRUMENTS:
         p.add_argument(f"--{inst}", help=f"canal(es) del {inst}: fm1..fm6, psg1..psg3 (separados por comas)")
+    p.add_argument(f"--{DRUMS}", help="canales de la batería: ruido, fm6... (si no, el ruido y los que casi no cambian de tono)")
     p.set_defaults(func=cmd_import)
 
     p = sub.add_parser("reimport", help="vuelve a importar las canciones con sus mismas opciones")

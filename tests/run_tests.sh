@@ -124,6 +124,9 @@ run_case demo-guitarra-medio       7 0 1 perfecto
 rm -rf "$PWD/build/test-nvram-records"
 run_case demo-record               7 0 1 record "" "$PWD/build/test-nvram-records"
 run_case demo-record-persiste      7 0 1 leer_record "" "$PWD/build/test-nvram-records"
+# Batería: el bot toca los pads y el bombo (carril naranja, C)
+run_case tormenta-bateria-experto  9 3 3 perfecto
+run_case cumbia-bateria-facil      3 3 0 perfecto
 # Opciones: espejo, velocidad (75% y 125%) y práctica (de 1/2 a 3/4: debe repetirse)
 run_case tormenta-espejo           9 0 3 perfecto "espejo=1"
 run_case tormenta-lenta            9 0 3 perfecto "velocidad=1"

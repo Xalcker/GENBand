@@ -141,6 +141,8 @@ extern u16 tile_solid;          // + color (0-15): un tile de un solo color
 extern u16 tile_scroll;         // capa que se desplaza: líneas de tiempo (ver gfx.c)
 extern u16 tile_gem;            // sprites de 4x2 tiles (8 tiles cada uno): + (escala * 5 + carril) * 8
 extern u16 tile_star_gem;
+extern u16 tile_cymbal;         // platillos de la batería (rombos del color del carril), como tile_gem
+extern u16 tile_trap;           // de aquí hasta la fuente: el trapecio de la autopista (perspective_build)
 extern u16 tile_tail;           // sprites de 1x2 tiles: + (ancho * 5 + carril) * 2 (anchos 8, 6 y 4)
 extern u16 tile_ring;
 extern u16 tile_ring_on;
@@ -149,7 +151,7 @@ extern u16 tile_meter;          // medidor de vida: 3 colores x 9 niveles
 extern u16 tile_starbar;        // barra de poder estelar: 2 colores x 9 niveles
 extern u16 tile_logo;           // + 0..6: los tiles del logo (un color por fila)
 
-// Tile de la capa que se desplaza: line 0 = nada, 1 = tiempo, 2 = compás; row = renglón en el tile
+// Tile de la capa que se desplaza: line 0 = nada, 1 = tiempo, 2 = compás, 3 = bombo; row = renglón en el tile
 u16 scroll_tile(u16 line, u16 row);
 
 // --- Perspectiva (perspective.c) -----------------------------------------------------------------
@@ -170,14 +172,10 @@ extern u16 depth_scale[DEPTH_MAX - DEPTH_MIN + 1];  // y su escala (8.8)
 extern u16 trap_map[STRIP_ROW][40];         // el fondo en trapecio, listo para el plano B
 
 void perspective_init(void);
+void perspective_build(u16 lanes, u16 lane_w);  // el trapecio de la autopista con esos carriles
 void perspective_start(void);               // enciende la interrupción de cada línea
 void perspective_stop(void);
 void perspective_set_scroll(u32 world_now); // el desplazamiento del siguiente cuadro
 
-// Centro del carril (en píxeles) a una escala dada
-static inline s16 lane_x(u16 lane, u16 scale)
-{
-    return HWY_CX + (((s32) (2 * lane - 4) * 16 * scale) >> 8);
-}
 
 #endif

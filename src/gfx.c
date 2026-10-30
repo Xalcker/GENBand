@@ -36,7 +36,8 @@ static const u16 palettes[64] = {
     C(0x181818), C(0xE0E0E0), C(0x40C0FF), C(0x303040), C(0x000000), C(0x000000), C(0x000000), C(0xFF5040),
 };
 
-u16 tile_solid, tile_scroll, tile_gem, tile_star_gem, tile_ring, tile_ring_on, tile_flame, tile_tail;
+u16 tile_solid, tile_scroll, tile_gem, tile_star_gem, tile_cymbal, tile_ring, tile_ring_on, tile_flame, tile_tail;
+u16 tile_trap;
 u16 tile_meter, tile_starbar, tile_logo;
 
 static u16 next_tile;
@@ -118,8 +119,8 @@ static inline s32 ellipse_inv(s16 x, s16 y, u16 inv_x, u16 inv_y)
 #define ellipse(x, y, rx, ry) ellipse_inv((x), (y), INV(rx), INV(ry))
 
 // Una gema a escala k (0 = tamaño completo, cada paso es 10% más chica): elipse con brillo, o diamante
-// si es estelar
-static void draw_gem(bool star, u16 k)
+// si es estelar (azul con el borde del carril) o un platillo de la batería (del color del carril)
+static void draw_gem(bool star, u16 k, bool cymbal)
 {
     const s16 sc = 10 - k;                              // escala en décimas
     clear_canvas();
@@ -138,10 +139,10 @@ static void draw_gem(bool star, u16 k)
             {
                 const u32 d = (u32) (u16) abs(2 * x - 31) * ry + dy_part;
                 if (d > edge) continue;
-                u8 c = P1_STAR;
+                u8 c = cymbal ? P1_LANE : P1_STAR;
                 if (d > outline) c = P1_OUTLINE;
-                else if (d > lane) c = P1_LANE;
-                else if (dy > dark) c = P1_STAR_DK;
+                else if (d > lane) c = cymbal ? P1_DARK : P1_LANE;
+                else if (dy > dark) c = cymbal ? P1_DARK : P1_STAR_DK;
                 else if (d < shine && dy < 0) c = P1_WHITE;
                 canvas[y][x] = c;
             }
@@ -232,10 +233,11 @@ static void tile_hline(u32 *t, u16 y, u8 c)
 //
 //   tile_scroll + 0..7     línea de tiempo (gris) desde el renglón 0..7
 //   tile_scroll + 8..15    línea de compás (blanca) desde el renglón 0..7
+//   tile_scroll + 16..23   la barra del bombo de la batería (naranja, 4 píxeles) desde el renglón 0..7
 
 u16 scroll_tile(u16 line, u16 row)
 {
-    // line: 0 = nada, 1 = tiempo, 2 = compás; row: renglón de la línea dentro del tile
+    // line: 0 = nada, 1 = tiempo, 2 = compás, 3 = bombo; row: renglón de la línea dentro del tile
     return line ? tile_scroll + (line - 1) * 8 + row : 0;
 }
 
@@ -243,14 +245,19 @@ static void make_scroll_tiles(void)
 {
     u32 t[8];
     tile_scroll = next_tile;
-    for (u16 kind = 0; kind < 2; kind++)
+    static const u8 thickness[3] = { 2, 3, 4 };
+    for (u16 kind = 0; kind < 3; kind++)
         for (u16 row = 0; row < 8; row++)
         {
-            const u16 thick = kind ? 3 : 2;
+            const u16 thick = thickness[kind];
             const u16 first = min(row, 8 - thick);
             tile_clear(t);
             for (u16 y = first; y < first + thick; y++)
-                t[y] = 0x11111111UL * (kind ? P1_WHITE : P1_GRAY);
+            {
+                const u8 c = kind == 2 ? ((y == first || y == first + thick - 1) ? P1_DARK + 4 : P1_LANE + 4)
+                                       : (kind ? P1_WHITE : P1_GRAY);
+                t[y] = 0x11111111UL * c;
+            }
             load(t, 1);
         }
 }
@@ -334,13 +341,19 @@ void gfx_init(void)
     tile_gem = next_tile;
     for (u16 k = 0; k < GEM_SCALES; k++)
     {
-        draw_gem(FALSE, k);
+        draw_gem(FALSE, k, FALSE);
         load_lanes();
     }
     tile_star_gem = next_tile;
     for (u16 k = 0; k < GEM_SCALES; k++)
     {
-        draw_gem(TRUE, k);
+        draw_gem(TRUE, k, FALSE);
+        load_lanes();
+    }
+    tile_cymbal = next_tile;
+    for (u16 k = 0; k < GEM_SCALES; k++)
+    {
+        draw_gem(TRUE, k, TRUE);
         load_lanes();
     }
     draw_ring(FALSE);
@@ -365,5 +378,8 @@ void gfx_init(void)
         load(t, 1);
     }
 
+    // Lo que queda antes de la fuente es para el trapecio de la autopista, que se arma al empezar cada
+    // partida (con 5 carriles, o 4 en la batería): ver perspective_build
+    tile_trap = next_tile;
     perspective_init();
 }

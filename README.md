@@ -97,6 +97,13 @@ Con cualquier opción distinta de la normal no se guardan récords (salvo EFECTO
 En la pausa, Start sigue y B sale al menú (en una práctica: A y B ponen las marcas y C sale). En BlastEm, por defecto: flechas, A/S/D = A/B/C,
 Q/W/E = X/Y/Z, Enter = Start.
 
+**Batería** (4º instrumento): las mismas reglas de NESBand, al estilo de Rock Band. La autopista tiene 4
+columnas en su orden (rojo, amarillo, azul, verde) y el **bombo es una barra naranja** que cruza la autopista
+y se toca con **C**. Tarola = rojo (↓/Y), tom 1 / hi-hat = amarillo (→/Z), tom 2 / ride = azul (B),
+tom 3 / crash = verde (←/X). Los platillos se ven como rombos solo en **experto**; en las demás dificultades se
+tocan como toms. Fácil usa bombo, tarola y tom 1; medio agrega el tom 2 y acordes de dos; difícil y experto,
+hasta 3 botones a la vez (el pie y dos manos).
+
 Con el control de 6 botones, la mano derecha puede tocar los 5 carriles con X, Y, Z, B y C. Los charts no
 piden verde + amarillo a la vez (← y → no se pueden apretar juntos en la cruz), para que sirvan con los dos
 controles.
@@ -160,6 +167,7 @@ uv run genband import-song "songs_src/Sonic/02 Green Hill Zone.vgz" --name ghz -
 | `--title` / `--game` | Lo que se muestra en el menú (si no, sale del VGM) |
 | `--duration S` | Segundos que se graban, si el VGM tiene bucle (si no, 120) |
 | `--guitarra`, `--teclado`, `--bajo` | Canal(es) de cada instrumento, separados por comas (`fm1,fm4`); sin esto se usa la sugerencia |
+| `--bateria` | Canales de la batería (`ruido,fm6`); sin esto, el ruido y los canales que casi no cambian de tono |
 | `--beat-frames N` | Cuadros por tiempo, si el tempo detectado sale mal (las líneas de compás no cuadran) |
 
 Deja `src/songs/<nombre>/song.c` (la música, los 12 charts y la ficha de la canción) e `import.json` (las
@@ -184,6 +192,12 @@ Qué hace, paso a paso:
 **Silencio al fallar:** el reproductor no corta las notas; pone al mínimo el volumen de los operadores
 *portadores* del canal FM (los que suenan según su algoritmo) o la atenuación del PSG, y recuerda lo que
 pide la canción. Al acertar se restaura en el acto, así que la nota que estaba sonando se vuelve a oír.
+
+**Batería:** los golpes de sus canales se agrupan (en el ruido, por su tipo; en un canal FM, por su tono) y
+cada grupo tiene un papel (bombo, tarola, tom 1-3, y si es platillo) en `src/songs/<nombre>/drums.json`. Si
+no existe, `import-song` lo escribe con una sugerencia (el tono FM más grave es el bombo; en el ruido, el
+blanco más agudo es el hi-hat y el siguiente la tarola), que se corrige a mano y sobrevive a `reimport`. Con
+eso se generan los 4 charts de batería con el generador de NESBand (`drums.py`).
 
 **Lo que aún no suena:** el **DAC** (los samples de batería de muchos juegos). Alimentarlo necesita un driver
 en el Z80, que es la siguiente etapa; mientras, esas canciones suenan sin su batería sampleada.

@@ -117,6 +117,8 @@ void perspective_stop(void)
 // en tiles: los que quedan de un solo color (todo escenario o todo autopista) no gastan VRAM
 static u8 pixels[8][320];
 
+static u16 trap_lanes, trap_lane_w;     // los carriles del trapecio que está en la VRAM
+
 static void draw_line(u8 *px, u16 line)
 {
     if (line < HWY_TOP)
@@ -125,17 +127,23 @@ static void draw_line(u8 *px, u16 line)
         return;
     }
     const u16 scale = line_scale[line];
+    const s16 half = trap_lanes * trap_lane_w / 2;
     s16 bx[NUM_LANES + 1];
-    for (u16 k = 0; k <= NUM_LANES; k++)
-        bx[k] = HWY_CX + (((s32) (32 * k - 80) * scale + 128) >> 8);
+    for (u16 k = 0; k <= trap_lanes; k++)
+        bx[k] = HWY_CX + (((s32) (trap_lane_w * k - half) * scale + 128) >> 8);
+    const s16 last = bx[trap_lanes];
     memset(px, TRAP_OUT, bx[0]);
-    memset(px + bx[0], 0, bx[NUM_LANES] - bx[0] + 1);
-    memset(px + bx[NUM_LANES] + 1, TRAP_OUT, 320 - bx[NUM_LANES] - 1);
-    for (u16 k = 0; k <= NUM_LANES; k++) px[bx[k]] = TRAP_LINE;
+    memset(px + bx[0], 0, last - bx[0] + 1);
+    memset(px + last + 1, TRAP_OUT, 320 - last - 1);
+    for (u16 k = 0; k <= trap_lanes; k++) px[bx[k]] = TRAP_LINE;
 }
 
-static void build_trapezoid(void)
+void perspective_build(u16 lanes, u16 lane_w)
 {
+    if (lanes == trap_lanes && lane_w == trap_lane_w) return;
+    trap_lanes = lanes;
+    trap_lane_w = lane_w;
+    u16 next = tile_trap;
     u32 t[8];
     const u16 out = TILE_ATTR_FULL(PAL0, 1, 0, 0, tile_solid + TRAP_OUT);
     const u16 inside = TILE_ATTR_FULL(PAL0, 1, 0, 0, 0);
@@ -159,7 +167,12 @@ static void build_trapezoid(void)
             }
             if (uniform && first == TRAP_OUT) trap_map[row][col] = out;
             else if (uniform && first == 0) trap_map[row][col] = inside;
-            else trap_map[row][col] = TILE_ATTR_FULL(PAL0, 1, 0, 0, gfx_load_tile(t));
+            else if (next < TILE_FONT_INDEX)
+            {
+                VDP_loadTileData(t, next, 1, CPU);
+                trap_map[row][col] = TILE_ATTR_FULL(PAL0, 1, 0, 0, next++);
+            }
+            else trap_map[row][col] = inside;   // (no debería pasar: la VRAM no alcanzó)
         }
     }
 }
@@ -180,5 +193,5 @@ void perspective_init(void)
         depth_y[d - DEPTH_MIN] = ((s32) SPAN3 * K3 / den + YV3) / 3;
         depth_scale[d - DEPTH_MIN] = (s32) 256 * K3 / den;
     }
-    build_trapezoid();
+    perspective_build(NUM_LANES, 32);
 }

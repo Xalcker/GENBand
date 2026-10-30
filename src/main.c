@@ -8,7 +8,7 @@
 Selection sel;
 Result result;
 
-const char *const instrument_names[NUM_INSTRUMENTS] = { "GUITARRA", "TECLADO", "BAJO" };
+const char *const instrument_names[NUM_INSTRUMENTS] = { "GUITARRA", "TECLADO", "BAJO", "BATERIA" };
 const char *const difficulty_names[NUM_DIFFICULTIES] = { "FACIL", "MEDIO", "DIFICIL", "EXPERTO" };
 
 Screen current_screen;          // la pantalla que corre (la leen las pruebas)
