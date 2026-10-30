@@ -276,7 +276,7 @@ def _bateria(c: Cancion) -> tuple[list[tuple[int, str]], list[tuple[int, str]]]:
     return bombos, ruido
 
 
-def _tocar_fm(linea: _Linea, c: Cancion, ch: int, notas: list[tuple[int, int, str | None, str]]) -> None:
+def tocar_fm(linea: _Linea, c: Cancion, ch: int, notas: list[tuple[int, int, str | None, str]]) -> None:
     cargado = None
     extra = c.mezcla.get(CANALES_FM[ch], 0)
     for cuadro, cuadros, n, ins in notas:
@@ -324,43 +324,36 @@ def _envolvente(linea: _Linea, cuadro: int, cuadros: int, ch: int, volumen: list
             break
 
 
-def escribir(c: Cancion, ruta: Path, bucle: bool = False) -> None:
-    """Escribe la cancion como VGM. Con `bucle`, se repite entera (la musica del titulo)."""
-    largos = {k: len(v) for k, v in c.canales.items()}
-    if len(set(largos.values())) != 1:
-        raise ValueError(f"los canales no miden lo mismo (en compases): {largos}")
+def nueva_linea() -> _Linea:
+    """Una linea de tiempo con el chip en silencio y listo (sin LFO, canal 3 normal, sin DAC)."""
     linea = _Linea()
-    linea.ym_global(0, 0x22, 0)  # sin LFO
-    linea.ym_global(0, 0x27, 0)  # canal 3 normal
+    linea.ym_global(0, 0x22, 0)
+    linea.ym_global(0, 0x27, 0)
     linea.ym_global(0, 0x2B, 0)  # sin DAC: el canal 6 es FM
     for ch in range(6):
         linea.ym_global(0, 0x28, _codigo(ch))
     for ch in range(4):
         linea.psg(0, 0x9F | (ch << 5))
+    return linea
 
-    for ch, clave in enumerate(CANALES_FM):
-        if clave in c.canales:
-            _tocar_fm(linea, c, ch, _notas_canal(c, clave))
-    for ch, clave in enumerate(CANALES_PSG):
-        if clave in c.canales:
-            _tocar_psg(linea, c, ch, _notas_canal(c, clave))
-    if "bateria" in c.canales:
-        if "fm6" in c.canales:
-            raise ValueError("la bateria usa el canal fm6 para el bombo")
-        bombos, ruido = _bateria(c)
-        f = c.fila_cuadros
-        _tocar_fm(linea, c, 5, [(cuadro, 2 * f, "C2", ins) for cuadro, ins in bombos])
-        control = None
-        for i, (cuadro, ins) in enumerate(ruido):
-            sonido = c.instrumentos[ins]
-            assert isinstance(sonido, PSG) and sonido.ruido is not None
-            siguiente = ruido[i + 1][0] if i + 1 < len(ruido) else cuadro + 4 * f
-            if sonido.ruido != control:
-                linea.psg(cuadro, sonido.ruido)
-                control = sonido.ruido
-            _envolvente(linea, cuadro, siguiente - cuadro, 3, sonido.volumen)
 
-    total = c.compases * FILAS_POR_COMPAS * c.fila_cuadros
+def tocar_bateria(linea: _Linea, c: Cancion, bombos: list[tuple[int, str]], ruido: list[tuple[int, str]]) -> None:
+    """Bombos en el FM 6 y golpes en el ruido del PSG; cada golpe de ruido suena hasta el siguiente."""
+    f = c.fila_cuadros
+    tocar_fm(linea, c, 5, [(cuadro, 2 * f, "C2", ins) for cuadro, ins in bombos])
+    control = None
+    for i, (cuadro, ins) in enumerate(ruido):
+        sonido = c.instrumentos[ins]
+        assert isinstance(sonido, PSG) and sonido.ruido is not None
+        siguiente = ruido[i + 1][0] if i + 1 < len(ruido) else cuadro + 4 * f
+        if sonido.ruido != control:
+            linea.psg(cuadro, sonido.ruido)
+            control = sonido.ruido
+        _envolvente(linea, cuadro, siguiente - cuadro, 3, sonido.volumen)
+
+
+def escribir_linea(linea: _Linea, c: Cancion, total: int, ruta: Path, bucle: bool = False) -> None:
+    """Escribe las escrituras de la linea como VGM; `total` es lo que dura la cancion (en cuadros)."""
     vgm = VgmWriter()
     if bucle:
         vgm.mark_loop()
@@ -376,4 +369,23 @@ def escribir(c: Cancion, ruta: Path, bucle: bool = False) -> None:
     # Sin bucle, medio segundo mas para que se apague lo ultimo
     vgm.wait_frames(total + (0 if bucle else 30) - actual)
     ruta.write_bytes(vgm.to_bytes(c.titulo, "GENBand", c.autor))
-    print(f"{ruta}: {c.compases} compases, {total / 60:.0f} s")
+    print(f"{ruta}: {total / 60:.0f} s")
+
+
+def escribir(c: Cancion, ruta: Path, bucle: bool = False) -> None:
+    """Escribe la cancion como VGM. Con `bucle`, se repite entera (la musica del titulo)."""
+    largos = {k: len(v) for k, v in c.canales.items()}
+    if len(set(largos.values())) != 1:
+        raise ValueError(f"los canales no miden lo mismo (en compases): {largos}")
+    linea = nueva_linea()
+    for ch, clave in enumerate(CANALES_FM):
+        if clave in c.canales:
+            tocar_fm(linea, c, ch, _notas_canal(c, clave))
+    for ch, clave in enumerate(CANALES_PSG):
+        if clave in c.canales:
+            _tocar_psg(linea, c, ch, _notas_canal(c, clave))
+    if "bateria" in c.canales:
+        if "fm6" in c.canales:
+            raise ValueError("la bateria usa el canal fm6 para el bombo")
+        tocar_bateria(linea, c, *_bateria(c))
+    escribir_linea(linea, c, c.compases * FILAS_POR_COMPAS * c.fila_cuadros, ruta, bucle)

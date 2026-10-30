@@ -9,6 +9,15 @@ build/
 songs_src/
 src/songs/*
 # Canciones originales de GENBand (GPL-2.0-or-later, compuestas con audio/compose.py): sí van en git.
+!src/songs/amanecer/
+!src/songs/brisa/
+!src/songs/carrera/
+!src/songs/cumbia/
+!src/songs/demo/
+!src/songs/luna/
+!src/songs/marcha/
+!src/songs/noche/
+!src/songs/salto/
 !src/songs/tormenta/
 
 # Python (uv)

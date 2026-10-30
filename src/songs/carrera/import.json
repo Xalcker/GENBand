@@ -1,0 +1,7 @@
+{
+  "name": "carrera",
+  "source": "audio/carrera.vgm",
+  "guitarra": "fm1",
+  "teclado": "fm2",
+  "bajo": "fm3"
+}

@@ -1,0 +1,7 @@
+{
+  "name": "demo",
+  "source": "audio/demo.vgm",
+  "guitarra": "fm1",
+  "teclado": "fm2",
+  "bajo": "fm3"
+}

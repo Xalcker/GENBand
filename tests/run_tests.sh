@@ -80,12 +80,18 @@ sys.exit(1 if problems else 0)
 PY
 }
 
-run_case tormenta-guitarra-experto 0 0 3 perfecto
-run_case tormenta-bajo-dificil     0 2 2 perfecto
-run_case tormenta-teclado-facil    0 1 0 perfecto
-run_case tormenta-nada             0 0 1 nada
-run_case tormenta-sinfallo         0 0 0 sinfallo
-run_case tormenta-mitad            0 0 3 mitad
+# Las canciones van en el menú por orden alfabético del título: 0 Amanecer, 1 Brisa, 2 Carrera, 3 Cumbia,
+# 4 Luz de Luna, 5 Marcha, 6 Noche, 7 Primer Ensayo, 8 Salto, 9 Tormenta
+run_case tormenta-guitarra-experto 9 0 3 perfecto
+run_case tormenta-bajo-dificil     9 2 2 perfecto
+run_case tormenta-teclado-facil    9 1 0 perfecto
+run_case tormenta-nada             9 0 1 nada
+run_case tormenta-sinfallo         9 0 0 sinfallo
+run_case tormenta-mitad            9 0 3 mitad
+run_case carrera-guitarra-experto  2 0 3 perfecto
+run_case cumbia-bajo-experto       3 2 3 perfecto
+run_case luna-teclado-dificil      4 1 2 perfecto
+run_case demo-guitarra-medio       7 0 1 perfecto
 
 if [ $fails -gt 0 ]; then
     echo "$fails caso(s) fallaron"

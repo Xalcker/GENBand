@@ -1,0 +1,7 @@
+{
+  "name": "brisa",
+  "source": "audio/brisa.vgm",
+  "guitarra": "fm1",
+  "teclado": "fm2",
+  "bajo": "fm3"
+}

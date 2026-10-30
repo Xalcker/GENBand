@@ -1,0 +1,8 @@
+{
+  "name": "cumbia",
+  "source": "audio/cumbia.vgm",
+  "beat_frames": 36,
+  "guitarra": "fm1",
+  "teclado": "fm2",
+  "bajo": "fm3"
+}

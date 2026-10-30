@@ -8,7 +8,12 @@ el sonido FM del YM2612 y la música importada de archivos VGM.
 fallo), juego para **1 jugador** con pausa, notas sostenidas, frases de poder estelar, medidor de vida, y
 pantalla de resultados con precisión, combo máximo y estrellas. Los charts se generan automáticamente para
 guitarra, teclado y bajo en 4 dificultades, y si fallas tu instrumento se calla hasta tu siguiente acierto,
-como en Rock Band. Trae una canción original, *Tormenta de Neón* (la de NESBand, arreglada para FM).
+como en Rock Band, y la autopista va en perspectiva.
+
+**Canciones:** las diez originales de NESBand (GPL-2.0-or-later), arregladas para FM: *Primer Ensayo*,
+*Tormenta de Neón* (rock, guitarra), *Luz de Luna* (balada, teclado), *Salto Mortal* (funk, bajo), *Marcha
+del Cartucho*, *Noche sin Estrellas*, *Carrera de Fuego*, *Brisa de Verano* (surf), *Cumbia del Cartucho* y
+*Amanecer Digital* (trance).
 
 ![Juego](docs/juego.png)
 
@@ -171,6 +176,21 @@ uv run python audio/tormenta.py
 uv run genband import-song audio/tormenta.vgm --name tormenta --guitarra fm1 --teclado fm2 --bajo fm3
 ```
 
+Las otras nueve canciones de NESBand no se reescribieron: `audio/nesband_fm.py` convierte sus proyectos de
+FamiStudio (copiados en `audio/nesband/`) a VGM. Cada canal del NES va al FM con el mismo papel (pulso 1 →
+FM 1 guitarra, pulso 2 → FM 2 teclado, triángulo → FM 3 bajo; ruido y samples DPCM → batería) y cada
+instrumento toma un sonido de `audio/sonidos.py` según su nombre, con su volumen traducido a atenuación:
+
+```bash
+uv run python audio/nesband_fm.py
+```
+
+```bash
+uv run genband import-song audio/luna.vgm --name luna --guitarra fm1 --teclado fm2 --bajo fm3
+```
+
+*Cumbia del Cartucho* necesita `--beat-frames 36` (el estimador le adivina el doble de tempo).
+
 La música del título es `audio/titulo.py`; `uv run genband build-audio` la convierte a `src/titulo_music.c`.
 
 ## Pruebas
@@ -219,7 +239,7 @@ Lo que ya tiene NESBand y falta aquí, más o menos en orden:
 3. **Batería** como instrumento (con el editor de asignación de golpes).
 4. **Récords** en la SRAM del cartucho, con iniciales.
 5. **Opciones** (espejo, velocidad, caída de notas, práctica).
-6. Más canciones originales (las otras nueve de NESBand, arregladas para FM).
+6. Generar los gráficos al compilar (en Python) en vez de al arrancar: hoy el arranque tarda ~2 s.
 7. **Editor de charts** en el navegador, con un reproductor del YM2612.
 8. Probar en hardware (flash cart y MiSTer).
 

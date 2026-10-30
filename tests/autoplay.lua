@@ -75,6 +75,7 @@ end
 local state = "titulo"
 local wait = 0
 local lane_release = { nil, nil, nil, nil, nil }
+local lane_gem = { nil, nil, nil, nil, nil } -- dirección de la nota sostenida cuyo fin aún no se leía
 local skip_toggle = false
 local shots = {}
 local missed_on_purpose = 0
@@ -87,6 +88,16 @@ local function play()
     local now = mem:read_u16(sym.now)
     local head = mem:read_u16(sym.gem_head)
     local tail = mem:read_u16(sym.gem_tail)
+    -- Una cola larga: su fin se lee del chart cuando entra a la pantalla
+    for lane = 1, 5 do
+        if lane_gem[lane] then
+            local gend = mem:read_u16(lane_gem[lane] + 2)
+            if gend > 0 then
+                lane_release[lane] = gend
+                lane_gem[lane] = nil
+            end
+        end
+    end
     -- Soltar lo que ya toca soltar
     for lane = 1, 5 do
         if lane_release[lane] and now >= lane_release[lane] then
@@ -116,7 +127,10 @@ local function play()
                         lane_field[lane]:set_value(1)
                         local until_frame = now + 3
                         if flags & SUSTAIN ~= 0 and gend > 0 then until_frame = math.max(until_frame, gend) end
-                        if flags & SUSTAIN ~= 0 and gend == 0 then until_frame = now + 600 end
+                        if flags & SUSTAIN ~= 0 and gend == 0 then
+                            until_frame = now + 6000
+                            lane_gem[lane] = base
+                        end
                         lane_release[lane] = until_frame
                     end
                 end
