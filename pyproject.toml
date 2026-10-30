@@ -1,6 +1,6 @@
 [project]
 name = "genband-tools"
-version = "0.1.0"
+version = "0.2.0"
 description = "Herramientas de PC para GENBand: componer e importar canciones (VGM) y generar charts"
 requires-python = ">=3.11"
 license = "GPL-2.0-or-later"

@@ -4,7 +4,7 @@ Un juego de ritmo estilo Guitar Hero / Rock Band para la Sega Genesis / Mega Dri
 [NESBand](https://github.com/Xalcker/NESBand): las mismas reglas y el mismo generador de charts, pero con
 el sonido FM del YM2612 y la música importada de archivos VGM.
 
-**Estado actual (v0.1.0, primera etapa):** título con su música, menú (canción, instrumento, dificultad,
+**Estado actual (v0.2.0):** título con su música, menú (canción, instrumento, dificultad,
 fallo), juego para **1 o 2 jugadores** (VS y Co-Op) con pausa, notas sostenidas, frases de poder estelar, medidor de vida, y
 pantalla de resultados con precisión, combo máximo y estrellas. Los charts se generan automáticamente para
 guitarra, teclado y bajo en 4 dificultades, y si fallas tu instrumento se calla hasta tu siguiente acierto,
@@ -60,6 +60,11 @@ blastem build/genband.bin
 El resultado es `build/genband.bin` (y `build/genband.sym`, los símbolos, que usan las pruebas). Compilar
 **no** necesita Python más allá del `python3` del sistema (para la suma de verificación de la ROM): las
 canciones ya convertidas viven en `src/songs/`.
+
+**Release:** `./build.sh --release` deja `build/release/genband-v<versión>.bin` con su suma de verificación
+(`.sha256`) y la licencia. Solo usa lo que está en git (si hay cambios sin commit en `src/` o `audio/`, se niega):
+las canciones importadas de juegos comerciales nunca entran. Es reproducible: con las mismas herramientas sale
+el mismo archivo. La versión sale del archivo `VERSION` y se ve en la pantalla de título.
 
 La ROM es para consolas **NTSC (60 Hz)**: la música y las notas avanzan un paso por cuadro, así que en una
 consola PAL irían más lento.

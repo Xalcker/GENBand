@@ -2,6 +2,9 @@
 # Compila GENBand: deja build/genband.bin (la ROM) y build/genband.sym (los símbolos, para las pruebas).
 #
 #   ./build.sh
+#   ./build.sh --release     build/release/genband-v<versión>.bin, su .sha256 y la licencia: solo con lo que
+#                            está en git (las canciones importadas de juegos comerciales nunca entran) y
+#                            reproducible (con las mismas herramientas sale el mismo archivo)
 #
 # Necesita m68k-elf-gcc (brew install m68k-elf-gcc m68k-elf-binutils) y SGDK en tools/sgdk (ver README).
 # No usa el makefile de SGDK: ese pide herramientas que solo vienen compiladas para Windows (o Java, para
@@ -11,8 +14,17 @@ cd "$(dirname "$0")"
 
 GDK="${GDK:-tools/sgdk}"
 PREFIX="${PREFIX:-m68k-elf-}"
+VERSION=$(tr -d ' \n' < VERSION)
+RELEASE=0
+[ "${1:-}" = "--release" ] && RELEASE=1
 OUT=build
+[ $RELEASE = 1 ] && OUT=build/release-obj
 ROM="$OUT/genband.bin"
+
+if [ $RELEASE = 1 ] && [ -n "$(git status --porcelain -- src audio build.sh VERSION)" ]; then
+    echo "Release: hay cambios sin commit en src/, audio/, build.sh o VERSION; la release sale de lo que está en git" >&2
+    exit 1
+fi
 
 if ! command -v "${PREFIX}gcc" >/dev/null; then
     echo "Falta ${PREFIX}gcc: brew install m68k-elf-gcc m68k-elf-binutils" >&2
@@ -26,12 +38,18 @@ fi
 mkdir -p "$OUT/obj"
 CFLAGS=(-DSGDK_GCC -m68000 -O2 -fomit-frame-pointer -Wall -Wextra -Wno-main -Wno-unused-parameter
         -Wno-unterminated-string-initialization -fno-builtin -ffunction-sections -fdata-sections
-        -fms-extensions -Isrc -I"$GDK/inc" -I"$GDK/res")
+        -fms-extensions -Isrc -I"$GDK/inc" -I"$GDK/res" -DGENBAND_VERSION="\"$VERSION\"")
 
-# La lista de canciones: todas las de src/songs/, en orden alfabético por título
+# La lista de canciones: todas las de src/songs/ (en una release, solo las que están en git), en orden
+# alfabético por título
+if [ $RELEASE = 1 ]; then
+    song_files=$(git ls-files 'src/songs/*/song.c')
+else
+    song_files=$(ls src/songs/*/song.c 2>/dev/null || true)
+fi
 songs=()
 while IFS= read -r line; do songs+=("$line"); done < <(
-    for f in src/songs/*/song.c; do
+    for f in $song_files; do
         [ -f "$f" ] || continue
         title=$(sed -n 's#^// TITULO: ##p' "$f" | head -1)
         printf '%s\t%s\n' "$title" "$(basename "$(dirname "$f")")"
@@ -58,7 +76,9 @@ sed "s#out/rom_head.bin#$OUT/rom_head.bin#" src/boot/sega.s > "$OUT/sega.s"
     -c "$OUT/sega.s" -o "$OUT/obj/sega.o"
 
 objs=()
-for src in src/*.c src/*.s src/songs/*/song.c "$OUT/song_list.c"; do
+song_sources=()
+for s in "${songs[@]}"; do song_sources+=("src/songs/$s/song.c"); done
+for src in src/*.c src/*.s "${song_sources[@]}" "$OUT/song_list.c"; do
     obj="$OUT/obj/$(echo "${src%.*}" | tr '/' '_').o"
     "${PREFIX}gcc" "${CFLAGS[@]}" -c "$src" -o "$obj"
     objs+=("$obj")
@@ -84,3 +104,12 @@ open(path, "wb").write(rom)
 print(f"{path}: {size // 1024} KB, ", end="")
 PY
 echo "${#songs[@]} canciones"
+
+if [ $RELEASE = 1 ]; then
+    mkdir -p build/release
+    name="genband-v$VERSION.bin"
+    cp "$ROM" "build/release/$name"
+    (cd build/release && shasum -a 256 "$name" > "$name.sha256")
+    cp LICENSE build/release/LICENSE
+    echo "build/release/$name: $(cut -d' ' -f1 "build/release/$name.sha256")"
+fi
