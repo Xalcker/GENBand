@@ -65,8 +65,22 @@ consola PAL irían más lento.
 
 ### Controles
 
-**Menú:** ↑/↓ elige el renglón, ←/→ cambia el valor, Start juega y B regresa al título. Mientras eliges,
-suena la canción.
+**Menú:** ↑/↓ elige el renglón, ←/→ cambia el valor, Start juega, **A abre las opciones** y B regresa al
+título. Mientras eliges, suena la canción.
+
+**Opciones (A en el menú):** modificadores para rejugar una canción o aprender una parte difícil, como en
+NESBand. Se quedan hasta que las cambies; Start juega y B regresa al menú.
+
+| Opción | Qué hace |
+|---|---|
+| ESPEJO | Invierte los carriles: la nota verde sale en el carril naranja y al revés (el chart se traduce al leerlo) |
+| VELOCIDAD | 100%, 75%, 50% o 125%: la canción, las notas y la música avanzan más lento o más rápido (el juego da 4, 3, 2 o 5 pasos cada 4 cuadros; la música se detiene en los cuadros sin paso, así que suena más lenta con el mismo tono). La autopista se mueve fracciones de paso en todos los cuadros, así que se ve pareja |
+| CAIDA DE NOTAS | Qué tan rápido bajan las notas, sin importar la dificultad: AUTO usa la de la dificultad, o la de fácil a experto |
+| PRACTICA | La canción se repite hasta 1/4, 1/2, 3/4 o el final, sin fallo y sin resultados. **Marcas:** en la pausa de una práctica, **A** hace que el bucle empiece 2 s antes de donde pausaste y **B** que termine donde pausaste; el bucle debe durar al menos 4 s. **C** regresa al menú |
+| INICIO DE LA PRACTICA | Dónde empieza: el principio, 1/4, 1/2 o 3/4 (nunca en o después del final). La música se adelanta hasta ahí; las notas de los primeros segundos se omiten para dar tiempo de reaccionar |
+| EFECTO AL FALLAR | SI, SOLO SONIDO o NO |
+
+Con cualquier opción distinta de la normal no se guardan récords (salvo EFECTO AL FALLAR).
 
 **Juego:** funciona con el control de 3 botones y con el de 6.
 
@@ -80,7 +94,7 @@ suena la canción.
 | Poder estelar | A    | A         |
 | Pausa    | Start     | Start     |
 
-En la pausa, Start sigue y B sale al menú. En BlastEm, por defecto: flechas, A/S/D = A/B/C,
+En la pausa, Start sigue y B sale al menú (en una práctica: A y B ponen las marcas y C sale). En BlastEm, por defecto: flechas, A/S/D = A/B/C,
 Q/W/E = X/Y/Z, Enter = Start.
 
 Con el control de 6 botones, la mano derecha puede tocar los 5 carriles con X, Y, Z, B y C. Los charts no
@@ -214,7 +228,9 @@ uv run pytest
 `run_tests.sh` compila y juega cada caso en MAME, sin ventana y a toda velocidad, con un bot
 (`tests/autoplay.lua`) que pasa el título, elige en el menú con el control como un jugador, toca leyendo
 las notas de la RAM y anota los resultados. Comprueba que el juego perfecto acierte todo con 5 estrellas,
-que sin tocar se pierda, que SIN FALLO llegue al final y que el audio suene. Cada caso deja en
+que sin tocar se pierda, que SIN FALLO llegue al final, que los golpes al aire rompan el combo, que el espejo y
+las velocidades se puedan jugar perfecto, que la práctica se repita y que sus marcas cambien el bucle, y que el
+audio suene. El bot llega a las opciones como un jugador (`GENBAND_OPTS`). Cada caso deja en
 `build/test-<nombre>/` las capturas, el audio (`audio.wav`) y el registro. `tests/run_tests.sh '*-nada'`
 corre solo los casos que coinciden; `--no-build` usa la ROM que ya está.
 

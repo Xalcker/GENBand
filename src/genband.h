@@ -17,12 +17,13 @@
 
 // --- Pantallas -----------------------------------------------------------------------------------
 
-typedef enum { SCREEN_BOOT, SCREEN_TITLE, SCREEN_MENU, SCREEN_PLAY, SCREEN_RESULTS } Screen;
+typedef enum { SCREEN_BOOT, SCREEN_TITLE, SCREEN_MENU, SCREEN_PLAY, SCREEN_RESULTS, SCREEN_OPTIONS } Screen;
 
 Screen title_run(void);
 Screen menu_run(void);
 Screen play_run(void);
 Screen results_run(void);
+Screen options_run(void);
 
 extern Screen current_screen;
 
@@ -32,14 +33,30 @@ typedef struct {
     u16 instrument;
     u16 difficulty;
     bool no_fail;
+    // Opciones (options.c): valen hasta que se cambian
+    bool mirror;                // ESPEJO: los carriles al revés
+    u16 speed;                  // VELOCIDAD: 0 = 100%, 1 = 75%, 2 = 50%, 3 = 125%
+    u16 fall;                   // CAIDA DE NOTAS: 0 = la de la dificultad, 1-4 = la de fácil a experto
+    u16 practice;               // PRACTICA: 0 = no, 1-3 = bucle hasta 1/4, 1/2 o 3/4 de la canción, 4 = toda
+    u16 practice_from;          // INICIO DE LA PRACTICA: 0 = el principio, 1-3 = desde 1/4, 1/2 o 3/4
     u16 miss_fx;                // EFECTO AL FALLAR: MISS_FX_ALL, MISS_FX_SOUND o MISS_FX_OFF
+    // Marcas de la práctica (A y B en la pausa): valen hasta volver al menú
+    bool marks;
+    u16 mark_start, mark_end;
 } Selection;
+
 
 #define MISS_FX_ALL   0         // sonido, temblor y rojo
 #define MISS_FX_SOUND 1         // solo el sonido
 #define MISS_FX_OFF   2
 
 extern Selection sel;
+
+// ¿Las opciones cambian el juego? (entonces no se guardan récords; EFECTO AL FALLAR no cuenta)
+static inline bool options_changed(void)
+{
+    return sel.mirror || sel.speed || sel.fall || sel.practice;
+}
 
 // Lo que deja la partida para la pantalla de resultados
 typedef struct {
@@ -86,10 +103,13 @@ void music_init(void);
 void music_play(const u8 *stream, u16 loop);    // loop: byte del flujo adonde vuelve al terminar
 void music_stop(void);
 void music_update(void);                        // una vez por cuadro
+void music_seek(const u8 *stream, u16 frames);  // la canción desde el principio, adelantada `frames` cuadros
 void music_pause(bool pause);
 void music_mute(u16 channels, bool mute);       // bits 0-5 FM, 6-8 PSG, 9 ruido
 bool music_playing(void);
+void music_advance(void);                       // solo la música (music_update = efectos + música)
 void sfx_play(u16 id);                          // SFX_... (sfx.h); suena aunque no haya música
+void sfx_update(void);                          // solo los efectos (un cuadro)
 
 extern const u8 *const titulo_music;
 extern const u16 titulo_loop;

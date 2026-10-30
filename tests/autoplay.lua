@@ -6,9 +6,12 @@
 --   GENBAND_SYM    símbolos de la ROM (build/genband.sym, salida de nm)
 --   GENBAND_OUT    carpeta donde van resultado.txt y las capturas
 --   GENBAND_SONG, GENBAND_INSTR, GENBAND_DIFF   lo que se elige en el menú (números, desde 0)
+--   GENBAND_OPTS   opciones (pantalla de A en el menú), como "espejo=1 velocidad=1 practica=1 inicio=0"
+--                  (los valores son el número de la opción, desde 0)
 --   GENBAND_MODE   perfecto (acierta todo), nada (no toca: debe perder), mitad (falla una de cada dos),
 --                  sinfallo (no toca, con SIN FALLO: debe llegar al final), aire (acierta todo y además,
---                  cada 2 segundos, aprieta un carril sin nota: golpes al aire)
+--                  cada 2 segundos, aprieta un carril sin nota: golpes al aire), practica (acierta todo
+--                  y, cuando la práctica se repitió dos veces, sale al menú desde la pausa)
 
 local sym_path = os.getenv("GENBAND_SYM")
 local out = os.getenv("GENBAND_OUT")
@@ -16,8 +19,11 @@ local want_song = tonumber(os.getenv("GENBAND_SONG") or "0")
 local want_instr = tonumber(os.getenv("GENBAND_INSTR") or "0")
 local want_diff = tonumber(os.getenv("GENBAND_DIFF") or "3")
 local mode = os.getenv("GENBAND_MODE") or "perfecto"
+local opts = {}
+for k, v in (os.getenv("GENBAND_OPTS") or ""):gmatch("(%w+)=(%d+)") do opts[k] = tonumber(v) end
+local OPTION_ORDER = { "espejo", "velocidad", "caida", "practica", "inicio", "efecto" }
 
-local SCREEN_TITLE, SCREEN_MENU, SCREEN_PLAY, SCREEN_RESULTS = 1, 2, 3, 4 -- (0: arrancando)
+local SCREEN_TITLE, SCREEN_MENU, SCREEN_PLAY, SCREEN_RESULTS, SCREEN_OPTIONS = 1, 2, 3, 4, 5 -- (0: arrancando)
 local GEM_SLOTS, GEM_SIZE = 64, 8
 local SUSTAIN = 0x40
 local TIMEOUT = 60 * 60 * 8 -- cuadros: ninguna canción dura tanto
@@ -70,6 +76,15 @@ local function menu_plan()
     for _ = 1, (want_diff - diff) % 4 do tap(field.right) end
     tap(field.down)
     if (mode == "sinfallo") ~= (no_fail ~= 0) then tap(field.right) end
+    if next(opts) then
+        -- Opciones: A las abre; cada renglón empieza en su valor normal (0)
+        tap(field.a)
+        table.insert(queue, { screen = SCREEN_OPTIONS })
+        for _, name in ipairs(OPTION_ORDER) do
+            for _ = 1, (opts[name] or 0) do tap(field.right) end
+            tap(field.down)
+        end
+    end
     tap(field.start)
 end
 
@@ -214,11 +229,39 @@ emu.register_frame_done(function()
         if #queue == 0 and s == SCREEN_PLAY then
             state = "jugando"
             note("juego: modo " .. mode)
+
         end
     elseif state == "jugando" then
         if s == SCREEN_PLAY then
             play()
             local now = mem:read_u16(sym.now)
+            if mode == "practica" or mode == "marcas" then
+                if last_now and now + 30 < last_now then
+                    -- (el primer reinicio tras marcar es el de la marca; el siguiente, el fin del bucle)
+                    if marked and restarted_after_mark and not loop_end then loop_end = last_now end
+                    if marked then restarted_after_mark = true end
+                    loops = (loops or 0) + 1
+                    loop_frame = frame
+                    note("la práctica volvió a empezar")
+                end
+                last_now = now
+                -- Marcas: en la primera vuelta, a los 6 s, pausa y B (el bucle termina ahí)
+                if mode == "marcas" and (loops or 0) == 1 and not marked and frame > loop_frame + 360 and #queue == 0 then
+                    marked = now
+                    note("marca de fin en el cuadro " .. now)
+                    release_all()
+                    tap(field.start)
+                    tap(field.b)
+                end
+                -- (no justo al reiniciar: mientras se adelanta la música el juego no lee el control)
+                if (loops or 0) >= (mode == "marcas" and 3 or 2) and frame > loop_frame + 120 and #queue == 0 and not leaving then
+                    leaving = true
+                    note("a la pausa y al menú, en el cuadro " .. now)
+                    release_all()
+                    tap(field.start)
+                    tap(field.c)
+                end
+            end
             if shot_at and frame == shot_at then snapshot("aire") end
             if now == 1200 and not shots.juego then
                 shots.juego = true
@@ -228,6 +271,15 @@ emu.register_frame_done(function()
             release_all()
             state = "resultados"
             wait = 60
+            return
+        elseif s == SCREEN_MENU and (mode == "practica" or mode == "marcas") then
+            local f = io.open(out .. "/resultado.txt", "w")
+            f:write(string.format("modo=%s\nvueltas=%d\nmarca=%d\nfin_bucle=%d\npuntaje=0\nnotas=0\ntotal=0\ncombo_max=0\nestrellas=0\nfallo=0\n",
+                mode, loops or 0, marked or 0, loop_end or 0))
+            f:close()
+            note("de vuelta en el menú tras " .. (loops or 0) .. " vueltas")
+            state = "fin"
+            wait = 3
             return
         end
     elseif state == "resultados" then
@@ -243,7 +295,16 @@ emu.register_frame_done(function()
     end
 
     if #queue > 0 then
-        local f = table.remove(queue, 1)
+        local f = queue[1]
+        if type(f) == "table" and f.screen then
+            -- Esperar a que la pantalla esté lista (y unos cuadros más) antes de seguir
+            if s == f.screen then
+                table.remove(queue, 1)
+                wait = 20
+            end
+            return
+        end
+        table.remove(queue, 1)
         f:set_value(1)
         wait = 6
     end

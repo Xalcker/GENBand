@@ -27,15 +27,15 @@ ROM="$PWD/build/genband.bin"
 SYM="$PWD/build/genband.sym"
 fails=0
 
-# caso: nombre canción instrumento dificultad modo
+# caso: nombre canción instrumento dificultad modo [opciones]
 run_case() {
-    local name=$1 song=$2 instr=$3 diff=$4 mode=$5
+    local name=$1 song=$2 instr=$3 diff=$4 mode=$5 opts=${6:-}
     if [ -n "$only" ] && [[ "$name" != $only ]]; then return; fi
     local dir="$PWD/build/test-$name"
     rm -rf "$dir"
     mkdir -p "$dir"
     GENBAND_SYM="$SYM" GENBAND_OUT="$dir" GENBAND_SONG=$song GENBAND_INSTR=$instr GENBAND_DIFF=$diff \
-    GENBAND_MODE=$mode mame genesis -cart "$ROM" -video none -sound none -nothrottle -skip_gameinfo \
+    GENBAND_MODE=$mode GENBAND_OPTS="$opts" mame genesis -cart "$ROM" -video none -sound none -nothrottle -skip_gameinfo \
         -wavwrite "$dir/audio.wav" -snapshot_directory "$dir" -cfg_directory "$dir/cfg" \
         -nvram_directory "$dir/nvram" -autoboot_script tests/autoplay.lua >"$dir/mame.log" 2>&1
     if [ ! -f "$dir/resultado.txt" ]; then
@@ -64,6 +64,12 @@ elif mode == "aire":
     if n["notas"] != n["total"]: problems.append(f"acertó {n['notas']} de {n['total']}")
     if n["combo_max"] >= n["total"]: problems.append("los golpes al aire no rompieron el combo")
     if n["fallo"]: problems.append("perdió")
+elif mode == "practica":
+    if int(r.get("vueltas", 0)) < 2: problems.append(f"la práctica no se repitió (vueltas: {r.get('vueltas')})")
+elif mode == "marcas":
+    if int(r.get("vueltas", 0)) < 3: problems.append(f"la práctica no se repitió (vueltas: {r.get('vueltas')})")
+    if abs(int(r["fin_bucle"]) - int(r["marca"])) > 5:
+        problems.append(f"el bucle terminó en {r['fin_bucle']} y la marca de fin estaba en {r['marca']}")
 elif mode == "mitad":
     if n["fallo"]: pass  # fallar la mitad puede costar la canción
     if n["notas"] == 0: problems.append("no acertó ninguna")
@@ -78,6 +84,10 @@ try:
     if rms < 200: problems.append(f"el audio está casi en silencio (RMS {rms:.0f})")
 except Exception as e:
     problems.append(f"no se pudo leer el audio: {e}")
+if mode in ("practica", "marcas"):
+    summary = f"vueltas {r.get('vueltas')}, marca {r.get('marca')}, fin del bucle {r.get('fin_bucle')}, audio RMS {r.get('audio_rms')}"
+    print(("FALLA " if problems else "ok    ") + f"{name}: {summary}" + ("".join(f"\n      - {p}" for p in problems)))
+    sys.exit(1 if problems else 0)
 summary = f"notas {n['notas']}/{n['total']}, puntaje {n['puntaje']}, estrellas {n['estrellas']}, combo {n['combo_max']}, fallo {n['fallo']}, audio RMS {r.get('audio_rms')}"
 print(("FALLA " if problems else "ok    ") + f"{name}: {summary}" + ("".join(f"\n      - {p}" for p in problems)))
 sys.exit(1 if problems else 0)
@@ -97,6 +107,12 @@ run_case carrera-guitarra-experto  2 0 3 perfecto
 run_case cumbia-bajo-experto       3 2 3 perfecto
 run_case luna-teclado-dificil      4 1 2 perfecto
 run_case demo-guitarra-medio       7 0 1 perfecto
+# Opciones: espejo, velocidad (75% y 125%) y práctica (de 1/2 a 3/4: debe repetirse)
+run_case tormenta-espejo           9 0 3 perfecto "espejo=1"
+run_case tormenta-lenta            9 0 3 perfecto "velocidad=1"
+run_case tormenta-rapida           9 0 3 perfecto "velocidad=3 caida=4"
+run_case marcha-practica           5 0 2 practica "practica=3 inicio=2"
+run_case marcha-marcas             5 0 2 marcas "practica=4 inicio=1"
 
 if [ $fails -gt 0 ]; then
     echo "$fails caso(s) fallaron"

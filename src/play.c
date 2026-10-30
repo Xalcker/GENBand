@@ -53,12 +53,20 @@
 #define MISS_FX_COOLDOWN 14             // y cuadros después sin repetirlo (6 + 14 = 20: 3 por segundo)
 #define MISS_SOUNDS      3              // clank, thud y bwomp
 
+#define PRACTICE_GRACE  60              // práctica desde un punto: las notas de los primeros cuadros se omiten
+#define PRACTICE_BACK   120             // marca de inicio (A en la pausa): 2 s antes de donde pausaste
+#define PRACTICE_MIN    240             // el bucle marcado debe durar al menos 4 s
+
 #define RESULTS_DELAY   60              // cuadros entre el fin de la música y los resultados
 #define FAIL_DELAY      150             // y entre perder y los resultados
 
 // Velocidad de la autopista por dificultad: cuadros que tarda en bajar 8 píxeles (como en NESBand)
 static const u16 frames_per_row[NUM_DIFFICULTIES] = { 6, 5, 4, 3 };
 static const u16 life_penalty[NUM_DIFFICULTIES] = { 1, 2, 2, 2 };
+
+// VELOCIDAD: pasos del juego cada 4 cuadros (100%, 75%, 50%, 125%). La canción, las notas y la música
+// avanzan por pasos; la autopista se dibuja con la fracción de paso, así que se ve pareja
+static const u16 speed_steps[4] = { 4, 3, 2, 5 };
 
 // Botones de cada carril: con la cruz y B, C (control de 3 botones) o con X, Y, Z (de 6 botones)
 static const u16 lane_buttons[NUM_LANES] = {
@@ -84,8 +92,14 @@ static const u8 *chart;
 static u16 chart_frame;         // cuadro de la última entrada leída
 static bool chart_done;
 
-static u16 now;
-static u16 speed;               // 8.8: píxeles por cuadro
+static u16 now;                 // el paso de la canción (con VELOCIDAD al 100%, un cuadro)
+static u16 step_frac;           // fracción del siguiente paso, en cuartos (VELOCIDAD)
+static u16 pressed;             // botones presionados desde el paso anterior (con VELOCIDAD, varios cuadros)
+static u32 view;                // dónde se dibuja: la distancia del mundo del último paso, más la fracción
+static u16 speed;               // 8.8: píxeles por paso
+static bool no_fail;            // SIN FALLO, o una práctica
+static u16 skip_frame;          // práctica desde un punto: las notas anteriores a este cuadro no se tocan
+static u16 practice_start, practice_end;
 static u16 next_row;            // siguiente renglón del mundo por dibujar en el plano A
 static u16 beat_index;          // siguiente línea de tiempo por dibujar
 static u16 beat_zero;           // cuadro de la primera línea de tiempo (antes del primer tiempo, si cabe)
@@ -150,9 +164,14 @@ static void decode(void)
     {
         const u16 frame = chart_frame + chart[0];
         if (wy(frame) > limit) break;
-        const u8 mask = chart[1];
+        u8 mask = chart[1];
         chart += 2;
         chart_frame = frame;
+        if (sel.mirror && mask != CHART_END)    // ESPEJO: el verde con el naranja y el rojo con el azul
+        {
+            const u8 l = mask & CHART_LANES;
+            mask = (mask & ~CHART_LANES) | ((l & 1) << 4) | ((l & 2) << 2) | (l & 4) | ((l & 8) >> 2) | ((l & 16) >> 4);
+        }
         if (mask == CHART_END)
         {
             chart_done = TRUE;
@@ -172,7 +191,7 @@ static void decode(void)
                 }
             }
         }
-        else if (mask & CHART_LANES)
+        else if ((mask & CHART_LANES) && frame >= skip_frame)
         {
             Gem *g = gem(gem_tail++);
             g->frame = frame;
@@ -238,7 +257,7 @@ static void set_muted(bool m)
 
 static void lose_life(u16 amount)
 {
-    if (sel.no_fail || failed || grace) return;
+    if (no_fail || failed || grace) return;
     grace = LIFE_GRACE;
     life = (life > amount) ? life - amount : 0;
     hud_dirty |= HUD_LIFE;
@@ -336,7 +355,7 @@ static void judge(void)
     // Botones presionados: cada uno acierta la nota más vieja de su carril que esté a tiempo
     for (u16 lane = 0; lane < NUM_LANES; lane++)
     {
-        if (!(joy_pressed & lane_buttons[lane])) continue;
+        if (!(pressed & lane_buttons[lane])) continue;
         Gem *found = NULL;
         for (u16 n = gem_head; n != gem_tail; n++)
         {
@@ -388,7 +407,7 @@ static void judge(void)
         hold_timer = 0;
 
     // Poder estelar
-    if ((joy_pressed & BUTTON_STAR_POWER) && !star_active && star_energy >= STAR_MIN && !failed)
+    if ((pressed & BUTTON_STAR_POWER) && !star_active && star_energy >= STAR_MIN && !failed)
     {
         star_active = TRUE;
         star_drain = 0;
@@ -447,7 +466,7 @@ static void build_row(u16 k)
 
 static void scroll_highway(void)
 {
-    const u32 world_now = wy(now);
+    const u32 world_now = view;
     while ((u32) next_row * 8 <= world_now + VIEW_DEPTH + 16)
         build_row(next_row++);
     perspective_set_scroll(world_now);
@@ -514,7 +533,7 @@ static void draw_sprites(void)
                TILE_ATTR_FULL(star_active ? PAL3 : PAL2, 1, 0, 0, tile_flame + frame * 8));
     }
     // Gemas, del tamaño que toca a su distancia
-    const u32 world_now = wy(now);
+    const u32 world_now = view;
     for (u16 n = gem_head; n != gem_tail; n++)
     {
         Gem *g = gem(n);
@@ -584,7 +603,7 @@ static void draw_hud(void)
                        STARBAR_COL + i, STRIP_ROW);
         }
     }
-    if ((hud_dirty & HUD_LIFE) && !sel.no_fail)
+    if ((hud_dirty & HUD_LIFE) && !no_fail)
     {
         const u16 color = life < LIFE_MAX / 4 ? 2 : (life < LIFE_MAX * 5 / 8 ? 1 : 0);
         for (u16 i = 0; i < METER_TILES; i++)
@@ -627,32 +646,66 @@ static void draw_stage(void)
     // Los lados (plano B)
     draw_text(BG_B, instrument_names[sel.instrument], 1, 2, PAL0);
     draw_text(BG_B, difficulty_names[sel.difficulty], 1, 3, PAL1);
-    if (!sel.no_fail) draw_text(BG_B, "VIDA", METER_COL, METER_ROW - 1, PAL1);
+    if (!no_fail) draw_text(BG_B, "VIDA", METER_COL, METER_ROW - 1, PAL1);
+    if (sel.practice) draw_text(BG_B, "PRACTICA", 1, 5, PAL2);
 }
 
 // --- Pausa -----------------------------------------------------------------------------------------
 
-// Devuelve TRUE si hay que salir al menú
-static bool pause_loop(void)
+typedef enum { RUN_RESULTS, RUN_MENU, RUN_RESTART } RunEnd;
+
+// Marcas de la práctica (en la pausa): A = el bucle empieza PRACTICE_BACK cuadros antes de donde
+// pausaste (y termina donde terminaba; si eso no deja PRACTICE_MIN cuadros, hasta el final de la
+// canción); B = el bucle termina donde pausaste (y empieza donde empezaba). Si el bucle quedaría de
+// menos de PRACTICE_MIN cuadros, la marca no se hace. Devuelve TRUE si se marcó (hay que reiniciar).
+static bool practice_mark(bool mark_start)
+{
+    u16 from, to;
+    if (mark_start)
+    {
+        from = now > PRACTICE_BACK ? now - PRACTICE_BACK : 0;
+        to = practice_end;
+        if (to < from + PRACTICE_MIN) to = song->end_frame;
+        if (to < from + PRACTICE_MIN) return FALSE;
+    }
+    else
+    {
+        from = practice_start;
+        to = now;
+        if (to < from + PRACTICE_MIN) return FALSE;
+    }
+    sel.marks = TRUE;
+    sel.mark_start = from;
+    sel.mark_end = to;
+    return TRUE;
+}
+
+static RunEnd pause_loop(void)
 {
     music_pause(TRUE);
-    queue_text(WINDOW, "      PAUSA: START SIGUE, B SALE      ", 1, 27, PAL2);
+    queue_text(WINDOW, sel.practice ? "PAUSA: START SIGUE, A INICIO, B FIN, C SALE"
+                                    : "      PAUSA: START SIGUE, B SALE      ", sel.practice ? 0 : 1, 27, PAL2);
     for (;;)
     {
         wait_frame();
         input_update();
         if (joy_pressed & BUTTON_START) break;
-        if (joy_pressed & BUTTON_B)
+        if ((joy_pressed & BUTTON_C) || (!sel.practice && (joy_pressed & BUTTON_B)))
         {
-            music_stop();
-            perspective_stop();
-            return TRUE;
+            sfx_play(SFX_VOLVER);
+            return RUN_MENU;
         }
+        if (sel.practice && (joy_pressed & (BUTTON_A | BUTTON_B)) && practice_mark(joy_pressed & BUTTON_A))
+        {
+            sfx_play(SFX_ACEPTAR);
+            return RUN_RESTART;
+        }
+        music_update();         // (con la música en pausa, solo los efectos)
     }
-    queue_text(WINDOW, "                                      ", 1, 27, PAL1);
+    queue_text(WINDOW, "                                        ", 0, 27, PAL1);
     queue_text(WINDOW, song->title, (40 - strlen(song->title)) / 2, 27, PAL1);
     music_pause(FALSE);
-    return FALSE;
+    return RUN_RESULTS;         // (sigue la partida)
 }
 
 // --- Partida ---------------------------------------------------------------------------------------
@@ -666,6 +719,34 @@ static u32 perfect_score(u16 notes)
     return total;
 }
 
+// PRACTICA: dónde empieza y dónde vuelve a empezar el bucle (en cuartos de la canción, o las marcas).
+// Si empieza después del principio, el juego arranca ahí: las notas de los primeros PRACTICE_GRACE
+// cuadros se omiten (no da tiempo de tocarlas) y la música se adelanta con music_seek.
+static void practice_setup(void)
+{
+    const u16 quarter = song->end_frame / 4;
+    practice_start = 0;
+    practice_end = 0xFFFF;
+    skip_frame = 0;
+    if (!sel.practice) return;
+    if (sel.marks)
+    {
+        practice_start = sel.mark_start;
+        practice_end = sel.mark_end;
+    }
+    else
+    {
+        practice_end = quarter * sel.practice;
+        const u16 from = min(sel.practice_from, sel.practice - 1);     // nunca en o después del final
+        practice_start = quarter * from;
+    }
+    if (!practice_start) return;
+    now = practice_start;
+    skip_frame = now + PRACTICE_GRACE;
+    next_row = (wy(now) > 16) ? (wy(now) - 16) / 8 : 0;
+    if (now > SONG_LEAD_IN) music_seek(song->stream, now - SONG_LEAD_IN);
+}
+
 static void start(void)
 {
     song = song_list[sel.song];
@@ -674,11 +755,14 @@ static void start(void)
     chart_done = FALSE;
     gem_head = gem_tail = resolve = 0;
     now = 0;
-    speed = (8 << 8) / frames_per_row[sel.difficulty];
+    step_frac = 0;
+    pressed = 0;
+    speed = (8 << 8) / frames_per_row[sel.fall ? sel.fall - 1 : sel.difficulty];
     next_row = 0;
     beat_zero = song->first_beat % song->beat_frames;
     bar_phase = ((song->first_beat - beat_zero) / song->beat_frames) % 4;
     beat_index = 0;
+    no_fail = sel.no_fail || sel.practice;
     score = star_score = 0;
     perfect = perfect_score(song->notes[sel.instrument][sel.difficulty]);
     combo = max_combo = notes_hit = 0;
@@ -700,6 +784,7 @@ static void start(void)
     hwy_color = RGB24_TO_VDPCOLOR(0x080838);
     PAL_setColors(1, &hwy_color, 1, CPU);
     hud_dirty = HUD_SCORE | HUD_COMBO | HUD_STAR | HUD_LIFE;
+    practice_setup();
 }
 
 static void finish(void)
@@ -718,44 +803,84 @@ static void finish(void)
     if (failed) result.stars = 0;
 }
 
-Screen play_run(void)
+// Un paso del juego: la música, el chart y el juicio de los botones. Devuelve TRUE si la partida terminó.
+static bool step(RunEnd *how)
 {
-    screen_reset();
-    start();
-    VDP_setEnable(FALSE);
-    VDP_setWindowVPos(TRUE, STRIP_ROW);
-    draw_stage();
-    VDP_setEnable(TRUE);
-    perspective_start();
-    sfx_play(SFX_ACEPTAR);     // suena mientras bajan las primeras filas
+    if (now == SONG_LEAD_IN) music_play(song->stream, MUSIC_NO_LOOP);
+    music_advance();
+    decode();
+    judge();
+    pressed = 0;
+    resolve_gems();
+    now++;
+    if (sel.practice && now >= practice_end)
+    {
+        *how = RUN_RESTART;
+        return TRUE;
+    }
+    *how = RUN_RESULTS;
+    return (failed && !--fail_timer) || now > song->end_frame + RESULTS_DELAY;
+}
 
+static RunEnd run(void)
+{
     for (;;)
     {
         input_update();
         if (joy_pressed & BUTTON_START)
         {
-            if (pause_loop()) return SCREEN_MENU;
+            const RunEnd paused_end = pause_loop();
+            if (paused_end != RUN_RESULTS) return paused_end;
             input_update();
         }
+        pressed |= joy_pressed;
 
-        if (now == SONG_LEAD_IN) music_play(song->stream, MUSIC_NO_LOOP);
-        music_update();
+        // VELOCIDAD: este cuadro da 0, 1 o 2 pasos
+        RunEnd how = RUN_RESULTS;
+        step_frac += speed_steps[sel.speed];
+        while (step_frac >= 4)
+        {
+            step_frac -= 4;
+            if (step(&how)) return how;
+        }
+        const s32 quarters = (s32) now * 4 - 4 + step_frac;     // el último paso, más la fracción
+        view = quarters > 0 ? ((u32) quarters * speed) >> 10 : 0;
+        sfx_update();           // los efectos van por cuadros, no por pasos
 
-        decode();
-        judge();
         update_miss_fx();
-        resolve_gems();
         scroll_highway();
         draw_sprites();
         draw_hud();
-
-        if (failed && !--fail_timer) break;
-        if (now >= song->end_frame + RESULTS_DELAY) break;
-        now++;
         wait_frame();
     }
-    music_stop();
-    perspective_stop();
-    finish();
-    return SCREEN_RESULTS;
+}
+
+Screen play_run(void)
+{
+    for (;;)
+    {
+        screen_reset();
+        start();
+        VDP_setEnable(FALSE);
+        VDP_setWindowVPos(TRUE, STRIP_ROW);
+        draw_stage();
+        VDP_setEnable(TRUE);
+        perspective_start();
+        sfx_play(SFX_ACEPTAR);     // suena mientras bajan las primeras filas
+
+        const RunEnd how = run();
+        music_stop();
+        perspective_stop();
+        if (how == RUN_MENU)
+        {
+            sel.marks = FALSE;
+            return SCREEN_MENU;
+        }
+        if (how == RUN_RESULTS)
+        {
+            finish();
+            return SCREEN_RESULTS;
+        }
+        // RUN_RESTART: la práctica vuelve a empezar
+    }
 }

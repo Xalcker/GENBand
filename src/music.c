@@ -37,6 +37,7 @@ static const u8 *ptr;
 static u16 loop_offset;
 static u16 wait;                // cuadros que faltan para la siguiente tanda de escrituras
 static bool paused;
+static bool seeking;            // music_seek: adelantando sin que suene nada
 
 static u16 muted;               // canales silenciados
 static u8 fm_tl[6][4];          // TL que pide la canción, por canal y operador (en el orden de los registros)
@@ -104,6 +105,8 @@ static void fm(u16 port, u8 reg, u8 value)
         if ((muted >> ch) & 1) fm_apply(ch);     // cambiaron los portadores
         return;
     }
+    else if (reg == 0x28 && seeking)
+        value &= 0x07;
     ym_write(port, reg, value);
 }
 
@@ -129,7 +132,7 @@ void sfx_play(u16 id)
 }
 
 // Un cuadro del efecto; al terminar, el canal vuelve a lo que pide la canción
-static void sfx_update(void)
+void sfx_update(void)
 {
     if (!sfx_ptr) return;
     for (;;)
@@ -214,10 +217,10 @@ void music_mute(u16 channels, bool mute)
         if ((changed >> (CH_PSG + ch)) & 1) psg_apply(ch);
 }
 
-void music_update(void)
+// Un cuadro de la música: las escrituras que tocan y, si toca, la espera hasta las siguientes
+static void music_step(void)
 {
-    sfx_update();
-    if (!ptr || paused) return;
+    if (!ptr) return;
     if (wait)
     {
         wait--;
@@ -257,4 +260,25 @@ void music_update(void)
             ptr = start + loop_offset;
         }
     }
+}
+
+void music_update(void)
+{
+    sfx_update();
+    music_advance();
+}
+
+void music_advance(void)
+{
+    if (!paused) music_step();
+}
+
+void music_seek(const u8 *stream, u16 frames)
+{
+    // Se aplican todas las escrituras (así cada canal queda con su sonido y su volumen) salvo los
+    // key-on, que se vuelven key-off: nada suena hasta la primera nota después del punto pedido
+    music_play(stream, MUSIC_NO_LOOP);
+    seeking = TRUE;
+    while (frames-- && ptr) music_step();
+    seeking = FALSE;
 }

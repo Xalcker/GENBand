@@ -1,6 +1,7 @@
 // Menú: canción, instrumento, dificultad y fallo. Mientras eliges, suena la canción.
 //
-// Arriba/abajo elige el renglón, izquierda/derecha cambia el valor, Start juega y B regresa al título.
+// Arriba/abajo elige el renglón, izquierda/derecha cambia el valor, Start juega, A abre las opciones
+// (options.c) y B regresa al título.
 
 #include "genband.h"
 
@@ -118,7 +119,7 @@ Screen menu_run(void)
 {
     screen_reset();
     draw_text_center(BG_A, "G E N B A N D", 2, PAL2);
-    draw_text_center(BG_A, "START JUEGA      B REGRESA", 25, PAL1);
+    draw_text_center(BG_A, "START JUEGA  A OPCIONES  B REGRESA", 25, PAL1);
     if (sel.song >= song_count) sel.song = 0;
     fix_instrument();
     draw_all();
@@ -137,6 +138,11 @@ Screen menu_run(void)
             music_stop();
             sfx_play(SFX_VOLVER);
             return SCREEN_TITLE;
+        }
+        if (joy_pressed & BUTTON_A)
+        {
+            sfx_play(SFX_ACEPTAR);
+            return SCREEN_OPTIONS;
         }
         if (joy_pressed & (BUTTON_UP | BUTTON_DOWN))
         {

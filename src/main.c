@@ -113,6 +113,7 @@ int main(bool hard_reset)
             case SCREEN_MENU:    current_screen = menu_run(); break;
             case SCREEN_PLAY:    current_screen = play_run(); break;
             case SCREEN_RESULTS: current_screen = results_run(); break;
+            case SCREEN_OPTIONS: current_screen = options_run(); break;
             default:             current_screen = SCREEN_TITLE; break;
         }
     }
