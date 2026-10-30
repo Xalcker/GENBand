@@ -274,6 +274,69 @@ def cmd_build_audio(args: argparse.Namespace) -> None:
     ]
     (ROOT / "src" / "titulo_music.c").write_text("\n".join(out), encoding="utf-8", newline="\n")
     print(f"src/titulo_music.c: {len(stream)} bytes, bucle en el byte {offset}")
+    build_sfx()
+
+
+SFX_CHANNEL = 2  # los efectos suenan en el tercer tono del PSG (ver music.c)
+
+
+def build_sfx() -> None:
+    """Los efectos de sonido, de audio/nesband/efectos.txt (los de NESBand), a src/sfx_data.c y src/sfx.h.
+
+    Cada "canción" del proyecto es un efecto: sus notas, con la envolvente de volumen de su instrumento, se
+    tocan en el tercer tono del PSG. En NESBand los efectos de fallo van dos veces (una por pulso, para no
+    sonar en el canal de quien falló); aquí todos van en el mismo canal, así que se toma solo la primera."""
+    path = ROOT / "audio" / "nesband" / "efectos.txt"
+    attrs = lambda line: dict(re.findall(r'(\w+)="([^"]*)"', line))  # noqa: E731
+    volumes: dict[str, list[int]] = {}
+    effects: list[tuple[str, list[tuple[int, int, str, str]]]] = []
+    instrument = None
+    for line in path.read_text(encoding="utf-8").splitlines():
+        a = attrs(line)
+        kind = line.strip().split(" ", 1)[0]
+        if kind == "Instrument":
+            instrument = a["Name"]
+        elif kind == "Envelope" and a.get("Type") == "Volume" and instrument:
+            volumes[instrument] = [int(v) for v in a["Values"].split(",")]
+        elif kind == "Song":
+            effects.append((a["Name"], []))
+        elif kind == "Note" and "Value" in a and effects:
+            effects[-1][1].append((int(a["Time"]), int(a["Duration"]), a["Value"], a["Instrument"]))
+    names = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
+    midi = lambda n: 12 * (int(n[-1]) + 1) + names.index(n[:-1])  # noqa: E731
+
+    out = ["// Generado por genband build-audio desde audio/nesband/efectos.txt: no editar a mano", '#include "genband.h"', ""]
+    header = ["// Generado por genband build-audio: los efectos de sonido (ver music.c, sfx_play)", "#ifndef SFX_H", "#define SFX_H", ""]
+    labels = []
+    for name, notes in effects:
+        if name[-1] == "2":
+            continue
+        name = name.rstrip("1").upper()
+        by_frame: dict[int, list[int]] = {}
+        end = 0
+        for time, duration, note, inst in notes:
+            period = max(1, min(1023, round(vgm.PSG_CLOCK / (32 * 440 * 2 ** ((midi(note) - 69) / 12)))))
+            writes = by_frame.setdefault(time, [])
+            writes += [0x80 | (SFX_CHANNEL << 5) | (period & 0x0F), period >> 4]
+            env = volumes.get(inst, [12])
+            for k in range(duration):
+                by_frame.setdefault(time + k, []).append(0x90 | (SFX_CHANNEL << 5) | (15 - env[min(k, len(env) - 1)]))
+            end = max(end, time + duration)
+        by_frame.setdefault(end, []).append(0x9F | (SFX_CHANNEL << 5))
+        data = bytearray()
+        for frame in range(end + 1):
+            for value in by_frame.get(frame, []):
+                data += bytes((vgm.CMD_PSG, value))
+            data.append(vgm.CMD_FRAME)
+        data.append(vgm.CMD_END)
+        out.append(c_bytes(f"sfx_{name.lower()}", bytes(data)))
+        header.append(f"#define SFX_{name} {len(labels)}")
+        labels.append(f"sfx_{name.lower()}")
+    out.append("const u8 *const sfx_streams[] = { " + ", ".join(labels) + " };\n")
+    header += ["", "extern const u8 *const sfx_streams[];", "", "#endif", ""]
+    (ROOT / "src" / "sfx_data.c").write_text("\n".join(out), encoding="utf-8", newline="\n")
+    (ROOT / "src" / "sfx.h").write_text("\n".join(header), encoding="utf-8", newline="\n")
+    print(f"src/sfx_data.c: {len(labels)} efectos")
 
 
 def main(argv: list[str] | None = None) -> None:

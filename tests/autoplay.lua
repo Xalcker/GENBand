@@ -7,7 +7,8 @@
 --   GENBAND_OUT    carpeta donde van resultado.txt y las capturas
 --   GENBAND_SONG, GENBAND_INSTR, GENBAND_DIFF   lo que se elige en el menú (números, desde 0)
 --   GENBAND_MODE   perfecto (acierta todo), nada (no toca: debe perder), mitad (falla una de cada dos),
---                  sinfallo (no toca, con SIN FALLO: debe llegar al final)
+--                  sinfallo (no toca, con SIN FALLO: debe llegar al final), aire (acierta todo y además,
+--                  cada 2 segundos, aprieta un carril sin nota: golpes al aire)
 
 local sym_path = os.getenv("GENBAND_SYM")
 local out = os.getenv("GENBAND_OUT")
@@ -106,6 +107,24 @@ local function play()
         end
     end
     if mode == "nada" or mode == "sinfallo" then return end
+    -- Golpe al aire: el carril naranja, si no tiene una nota cerca
+    if mode == "aire" and now % 120 == 60 and not lane_release[5] then
+        local free = true
+        local m = head
+        while m ~= tail do
+            local b = sym.gems + (m % GEM_SLOTS) * GEM_SIZE
+            local f = mem:read_u16(b)
+            if f > now + 10 then break end
+            if mem:read_u8(b + 4) & 0x10 ~= 0 and f + 10 >= now then free = false end
+            m = (m + 1) & 0xFFFF
+        end
+        if free then
+            lane_field[5]:set_value(1)
+            lane_release[5] = now + 2
+            air_hits = (air_hits or 0) + 1
+            if air_hits == 3 then shot_at = frame + 4 end
+        end
+    end
     -- Tocar las notas de este cuadro (el juego las juzga en el siguiente ciclo, con este mismo `now`)
     local n = head
     while n ~= tail do
@@ -200,6 +219,7 @@ emu.register_frame_done(function()
         if s == SCREEN_PLAY then
             play()
             local now = mem:read_u16(sym.now)
+            if shot_at and frame == shot_at then snapshot("aire") end
             if now == 1200 and not shots.juego then
                 shots.juego = true
                 snapshot("juego")
@@ -213,7 +233,7 @@ emu.register_frame_done(function()
     elseif state == "resultados" then
         snapshot("resultados")
         write_result()
-        note("fin (notas falladas a propósito: " .. missed_on_purpose .. ")")
+        note("fin (notas falladas a propósito: " .. missed_on_purpose .. ", golpes al aire: " .. (air_hits or 0) .. ")")
         state = "fin"
         wait = 3
         return

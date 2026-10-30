@@ -3,6 +3,7 @@
 
 #include <genesis.h>
 #include "song.h"
+#include "sfx.h"
 
 #define SONG_LEAD_IN    128     // cuadros de autopista antes de que arranque la música
 #define NUM_LANES       5
@@ -31,7 +32,12 @@ typedef struct {
     u16 instrument;
     u16 difficulty;
     bool no_fail;
+    u16 miss_fx;                // EFECTO AL FALLAR: MISS_FX_ALL, MISS_FX_SOUND o MISS_FX_OFF
 } Selection;
+
+#define MISS_FX_ALL   0         // sonido, temblor y rojo
+#define MISS_FX_SOUND 1         // solo el sonido
+#define MISS_FX_OFF   2
 
 extern Selection sel;
 
@@ -83,6 +89,7 @@ void music_update(void);                        // una vez por cuadro
 void music_pause(bool pause);
 void music_mute(u16 channels, bool mute);       // bits 0-5 FM, 6-8 PSG, 9 ruido
 bool music_playing(void);
+void sfx_play(u16 id);                          // SFX_... (sfx.h); suena aunque no haya música
 
 extern const u8 *const titulo_music;
 extern const u16 titulo_loop;

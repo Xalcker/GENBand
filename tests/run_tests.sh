@@ -60,6 +60,10 @@ elif mode == "nada":
 elif mode == "sinfallo":
     if n["fallo"]: problems.append("perdió con SIN FALLO")
     if n["notas"]: problems.append("acertó notas sin tocar")
+elif mode == "aire":
+    if n["notas"] != n["total"]: problems.append(f"acertó {n['notas']} de {n['total']}")
+    if n["combo_max"] >= n["total"]: problems.append("los golpes al aire no rompieron el combo")
+    if n["fallo"]: problems.append("perdió")
 elif mode == "mitad":
     if n["fallo"]: pass  # fallar la mitad puede costar la canción
     if n["notas"] == 0: problems.append("no acertó ninguna")
@@ -88,6 +92,7 @@ run_case tormenta-teclado-facil    9 1 0 perfecto
 run_case tormenta-nada             9 0 1 nada
 run_case tormenta-sinfallo         9 0 0 sinfallo
 run_case tormenta-mitad            9 0 3 mitad
+run_case tormenta-aire             9 0 2 aire
 run_case carrera-guitarra-experto  2 0 3 perfecto
 run_case cumbia-bajo-experto       3 2 3 perfecto
 run_case luna-teclado-dificil      4 1 2 perfecto

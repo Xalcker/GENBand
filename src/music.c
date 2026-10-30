@@ -12,12 +12,16 @@
 // Corre en el 68000, así que el Z80 se queda detenido (con el bus pedido, que es lo que deja al 68000
 // escribir en el YM2612).
 //
+// Efectos de sonido (sfx_play): van en el tercer tono del PSG, con el mismo formato de flujo. Mientras
+// suena uno, lo que la canción le escribe a ese canal solo se recuerda, y al terminar se restaura.
+//
 // Silenciar un canal (cuando el jugador falla, como en Rock Band) no corta sus notas: en el FM se pone
 // al mínimo el volumen (TL) de sus operadores portadores, y en el PSG la atenuación al máximo. El
 // reproductor recuerda los valores que pide la canción, así que al acertar se restauran en el acto y
 // la nota que ya estaba sonando se vuelve a oír.
 
 #include "genband.h"
+#include "sfx.h"
 
 #define YM_ADDR0  (*(vu8 *) 0xA04000)
 #define YM_DATA0  (*(vu8 *) 0xA04001)
@@ -39,6 +43,10 @@ static u8 fm_tl[6][4];          // TL que pide la canción, por canal y operador
 static u8 fm_alg[6];
 static u8 psg_vol[4];           // atenuación que pide la canción (15 = apagado)
 static u8 psg_latch;            // último registro elegido del PSG (byte con el bit 7)
+static u8 psg_tone[3][2];       // el tono que pide la canción a cada canal: los dos bytes que lo escriben
+
+#define SFX_CH    2             // el canal del PSG de los efectos
+static const u8 *sfx_ptr;       // el efecto que suena (NULL = ninguno)
 
 // Qué operadores suenan en cada algoritmo, en el orden de los registros (op1, op3, op2, op4 = bits 0-3)
 static const u8 carriers[8] = { 0x8, 0x8, 0x8, 0x8, 0xC, 0xE, 0xE, 0xF };
@@ -73,6 +81,7 @@ static void fm_apply(u16 ch)
 
 static void psg_apply(u16 ch)
 {
+    if (ch == SFX_CH && sfx_ptr) return;
     const bool off = (muted >> (CH_PSG + ch)) & 1;
     PSG_DATA = 0x90 | (ch << 5) | (off ? 15 : psg_vol[ch]);
 }
@@ -102,13 +111,41 @@ static void psg(u8 value)
 {
     u8 latch = (value & 0x80) ? value : psg_latch;
     if (value & 0x80) psg_latch = value;
+    const u16 ch = (latch >> 5) & 3;
     if (latch & 0x10)           // volumen
     {
-        const u16 ch = (latch >> 5) & 3;
         psg_vol[ch] = value & 0x0F;
         if ((muted >> (CH_PSG + ch)) & 1) value |= 0x0F;
     }
+    else if (ch < 3)            // tono: el byte con el registro y, después, la parte alta
+        psg_tone[ch][(value & 0x80) ? 0 : 1] = value;
+    if (ch == SFX_CH && sfx_ptr) return;    // el canal es del efecto: solo se recuerda
     PSG_DATA = value;
+}
+
+void sfx_play(u16 id)
+{
+    sfx_ptr = sfx_streams[id];
+}
+
+// Un cuadro del efecto; al terminar, el canal vuelve a lo que pide la canción
+static void sfx_update(void)
+{
+    if (!sfx_ptr) return;
+    for (;;)
+    {
+        const u8 cmd = *sfx_ptr++;
+        if (cmd == 0x50) PSG_DATA = *sfx_ptr++;
+        else if (cmd == 0x62) return;
+        else
+        {
+            sfx_ptr = NULL;
+            PSG_DATA = psg_tone[SFX_CH][0] | 0x80 | (SFX_CH << 5);
+            PSG_DATA = psg_tone[SFX_CH][1];
+            psg_apply(SFX_CH);
+            return;
+        }
+    }
 }
 
 static void silence(void)
@@ -116,7 +153,7 @@ static void silence(void)
     for (u16 code = 0; code < 7; code++)
         if (code != 3) ym_write(0, 0x28, code);
     for (u16 ch = 0; ch < 4; ch++)
-        PSG_DATA = 0x9F | (ch << 5);
+        if (ch != SFX_CH || !sfx_ptr) PSG_DATA = 0x9F | (ch << 5);
 }
 
 void music_init(void)
@@ -142,6 +179,7 @@ void music_play(const u8 *stream, u16 loop)
     memset(fm_tl, 0, sizeof(fm_tl));
     memset(fm_alg, 0, sizeof(fm_alg));
     memset(psg_vol, 15, sizeof(psg_vol));
+    memset(psg_tone, 0, sizeof(psg_tone));
 }
 
 void music_stop(void)
@@ -178,6 +216,7 @@ void music_mute(u16 channels, bool mute)
 
 void music_update(void)
 {
+    sfx_update();
     if (!ptr || paused) return;
     if (wait)
     {

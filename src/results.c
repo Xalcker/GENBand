@@ -48,7 +48,11 @@ Screen results_run(void)
     {
         input_update();
         if (joy_pressed & (BUTTON_START | BUTTON_A | BUTTON_C))
+        {
+            sfx_play(SFX_ACEPTAR);
             return SCREEN_MENU;
+        }
+        music_update();         // (solo los efectos: aquí no hay música)
         wait_frame();
     }
 }

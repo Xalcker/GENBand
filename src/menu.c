@@ -135,17 +135,20 @@ Screen menu_run(void)
         if (joy_pressed & BUTTON_B)
         {
             music_stop();
+            sfx_play(SFX_VOLVER);
             return SCREEN_TITLE;
         }
         if (joy_pressed & (BUTTON_UP | BUTTON_DOWN))
         {
             item = (item + ((joy_pressed & BUTTON_UP) ? ITEM_COUNT - 1 : 1)) % ITEM_COUNT;
             draw_all();
+            sfx_play(SFX_MOVER);
         }
         if (joy_pressed & (BUTTON_LEFT | BUTTON_RIGHT))
         {
             change((joy_pressed & BUTTON_LEFT) ? -1 : 1);
             draw_all();
+            sfx_play(SFX_MOVER);
         }
         if (!music_playing()) preview();     // la canción se repite mientras eliges
         music_update();

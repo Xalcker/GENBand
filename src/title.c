@@ -42,7 +42,10 @@ Screen title_run(void)
         else if (frame % 60 == 40)
             VDP_clearTextLineBG(BG_A, 19);
         if (joy_pressed & BUTTON_START)
+        {
+            sfx_play(SFX_ACEPTAR);
             return SCREEN_MENU;
+        }
         music_update();
         wait_frame();
     }

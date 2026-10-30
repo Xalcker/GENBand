@@ -49,6 +49,10 @@
 #define STARBAR_COL     15
 #define STARBAR_TILES   10
 
+#define MISS_FX_FRAMES   6              // cuadros con temblor y rojo al rasguear en falso
+#define MISS_FX_COOLDOWN 14             // y cuadros después sin repetirlo (6 + 14 = 20: 3 por segundo)
+#define MISS_SOUNDS      3              // clank, thud y bwomp
+
 #define RESULTS_DELAY   60              // cuadros entre el fin de la música y los resultados
 #define FAIL_DELAY      150             // y entre perder y los resultados
 
@@ -112,6 +116,9 @@ static u16 hud_dirty;
 
 static u16 row_buf[NUM_LANES * 4];
 static u16 hwy_color;           // color de la autopista (cambia con el poder estelar)
+static u16 miss_fx;             // cuadros que le quedan al efecto de fallo (y a su enfriamiento)
+static u16 miss_sound;          // el último sonido de fallo (0-2)
+static s16 shake[2];            // scroll horizontal de los planos A y B (el temblor al fallar)
 
 static inline Gem *gem(u16 n)
 {
@@ -259,8 +266,44 @@ static void miss(u16 lanes_missed)
     lose_life(life_penalty[sel.difficulty]);
 }
 
+// Rasgueaste en falso (un golpe al aire; una nota que se pasó sin tocarla solo calla el instrumento, como
+// en Rock Band): suena uno de tres efectos, nunca el mismo dos veces seguidas, y la autopista tiembla y
+// se tiñe de rojo unos cuadros. Mientras dura el efecto y su enfriamiento no se repite: en una racha de
+// fallos no parpadea más de 3 veces por segundo (como en NESBand).
+static void miss_feedback(void)
+{
+    if (miss_fx || sel.miss_fx == MISS_FX_OFF) return;
+    miss_fx = MISS_FX_FRAMES + MISS_FX_COOLDOWN;
+    miss_sound = (miss_sound + 1 + (now & 1)) % MISS_SOUNDS;
+    sfx_play(SFX_CLANK + miss_sound);
+}
+
+// Un cuadro del efecto de fallo: temblor (scroll X) y la autopista roja; todo por la cola de DMA
+static void update_miss_fx(void)
+{
+    static const s16 miss_shake[MISS_FX_FRAMES] = { 0, 1, 0, 2, 0, 2 };
+    if (!miss_fx) return;
+    miss_fx--;
+    const bool visual = sel.miss_fx == MISS_FX_ALL;
+    if (miss_fx >= MISS_FX_COOLDOWN && visual)
+    {
+        shake[0] = shake[1] = miss_shake[miss_fx - MISS_FX_COOLDOWN];
+        hwy_color = RGB24_TO_VDPCOLOR(0x601010);
+    }
+    else if (miss_fx == MISS_FX_COOLDOWN - 1 && visual)
+    {
+        shake[0] = shake[1] = 0;
+        hwy_color = RGB24_TO_VDPCOLOR(star_active ? 0x101878 : 0x080838);
+    }
+    else
+        return;
+    DMA_queueDma(DMA_VRAM, shake, VDP_getHScrollTableAddress(), 2, 2);
+    PAL_setColors(1, &hwy_color, 1, DMA_QUEUE);
+}
+
 static void air_hit(void)
 {
+    miss_feedback();
     break_combo();
     set_muted(TRUE);
     lose_life(LIFE_AIR);
@@ -275,7 +318,8 @@ static void hit(Gem *g, u16 lane)
     multiplier = min(4, 1 + combo / 10);
     star_score += 50 * multiplier;
     score += 50 * multiplier * (star_active ? 2 : 1);
-    if (!failed) life = min(LIFE_MAX, life + LIFE_HIT);
+    // Un acorde suma la vida de una sola nota aunque lleves dos botones (si no, se regalaría)
+    if (!failed && !(g->hit & ~(1 << lane))) life = min(LIFE_MAX, life + LIFE_HIT);
     set_muted(FALSE);
     fx[lane] = FX_FRAMES;
     if ((g->flags & CHART_SUSTAIN) && (!g->end || g->end > now))
@@ -348,6 +392,7 @@ static void judge(void)
     {
         star_active = TRUE;
         star_drain = 0;
+        sfx_play(SFX_ACEPTAR);
         hwy_color = RGB24_TO_VDPCOLOR(0x101878);
         PAL_setColors(1, &hwy_color, 1, DMA_QUEUE);
         hud_dirty |= HUD_STAR;
@@ -647,6 +692,8 @@ static void start(void)
     hold_lanes = 0;
     hold_timer = 0;
     memset(fx, 0, sizeof(fx));
+    miss_fx = miss_sound = 0;
+    shake[0] = shake[1] = 0;
     channels = song->channels[sel.instrument];
     muted = FALSE;
     paused = FALSE;
@@ -680,6 +727,7 @@ Screen play_run(void)
     draw_stage();
     VDP_setEnable(TRUE);
     perspective_start();
+    sfx_play(SFX_ACEPTAR);     // suena mientras bajan las primeras filas
 
     for (;;)
     {
@@ -695,6 +743,7 @@ Screen play_run(void)
 
         decode();
         judge();
+        update_miss_fx();
         resolve_gems();
         scroll_highway();
         draw_sprites();

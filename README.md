@@ -103,6 +103,9 @@ Son las de NESBand:
 - **Vida:** el medidor junto a la autopista. Cada acierto sube 1; perder una nota baja 2 (1 en fácil) y un
   golpe al aire 1. Si llega a 0, pierdes (tu instrumento calla y la franja dice FALLASTE). En el menú,
   **SIN FALLO** quita el medidor.
+- **Golpe al aire:** suena uno de tres efectos (nunca el mismo dos veces seguidas) y la autopista tiembla
+  y se pone roja unos cuadros; en una racha de fallos, a lo más 3 veces por segundo. Una nota que se pasó
+  sin tocarla solo calla tu instrumento. Un acorde suma la vida de una sola nota.
 - **Estrellas:** salen del puntaje (sin el poder estelar ni las colas) contra el puntaje perfecto: 20, 40,
   60, 80 y 95%.
 
@@ -190,6 +193,10 @@ uv run genband import-song audio/luna.vgm --name luna --guitarra fm1 --teclado f
 ```
 
 *Cumbia del Cartucho* necesita `--beat-frames 36` (el estimador le adivina el doble de tempo).
+
+Los efectos de sonido (mover, aceptar, volver y los tres de fallo) también son los de NESBand
+(`audio/nesband/efectos.txt`): `build-audio` los pasa a `src/sfx_data.c` y suenan en el tercer tono del PSG.
+Mientras suena uno, lo que la canción le pide a ese canal se guarda y se restaura al terminar.
 
 La música del título es la de NESBand (`audio/nesband/titulo.txt`): `audio/titulo.py` la pasa a FM con
 `nesband_fm.py`, en bucle, y `uv run genband build-audio` la convierte a `src/titulo_music.c`.
