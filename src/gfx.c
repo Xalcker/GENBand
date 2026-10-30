@@ -38,6 +38,8 @@ static const u16 palettes[64] = {
 
 u16 tile_solid, tile_scroll, tile_gem, tile_star_gem, tile_cymbal, tile_ring, tile_ring_on, tile_flame, tile_tail;
 u16 tile_trap;
+u16 tile_lamp, tile_crowd, tile_bolt;
+u32 crowd_tiles[3 * 4 * 8];     // el público en sus 3 dibujos (stage.c los copia a tile_crowd)
 u16 tile_meter, tile_starbar, tile_logo;
 
 static u16 next_tile;
@@ -286,6 +288,84 @@ static void make_tail_tiles(void)
         }
 }
 
+// --- Escenario (stage.c) -----------------------------------------------------------------------------
+
+// Una persona del público (8 px de ancho, 2 tiles de alto) en t[0..15]: cabeza y, según el dibujo, los
+// brazos abajo, arriba, o arriba y saltando (todo 2 píxeles más arriba). La silueta es oscura (color 9) y
+// el borde de arriba de la cabeza toma la luz del escenario (color 12, el de los haces)
+static void draw_person(u32 *t, u16 frame, u16 variant)
+{
+    u8 px[16][8];
+    memset(px, 0, sizeof(px));
+    const s16 lift = frame == 2 ? 2 : 0;
+    const s16 hx = variant ? 3 : 4;             // la cabeza, un poco corrida en la segunda persona
+    const s16 hy = (variant ? 5 : 4) - lift;
+    for (s16 y = 0; y < 16; y++)
+        for (s16 x = 0; x < 8; x++)
+        {
+            const s16 dx = x - hx, dy = y - hy;
+            u8 c = 0;
+            if (dx * dx + dy * dy <= 4) c = (dy <= -1) ? 12 : 9;           // la cabeza
+            else if (y >= hy + 3 && abs(dx) <= 3 - (y > hy + 5)) c = 9;     // hombros y cuerpo
+            if (frame && y < hy && y >= hy - 4 && (x == hx - 3 + (hy - y) / 3 || x == hx + 3 - (hy - y) / 3))
+                c = 9;                          // los brazos arriba
+            if (y >= 0 && y < 16) px[y][x] = c;
+        }
+    for (u16 y = 0; y < 16; y++)
+    {
+        u32 line = 0;
+        for (u16 x = 0; x < 8; x++) line = (line << 4) | px[y][x];
+        t[y] = line;            // t[0..7] es el tile de arriba y t[8..15] el de abajo
+    }
+}
+
+static void make_stage_tiles(void)
+{
+    u32 t[16];
+    // El foco: un círculo del color 13 con su borde oscuro
+    for (u16 y = 0; y < 8; y++)
+    {
+        u32 line = 0;
+        for (u16 x = 0; x < 8; x++)
+        {
+            const s16 dx = 2 * x - 7, dy = 2 * y - 7;
+            const s16 d = dx * dx + dy * dy;
+            line = (line << 4) | (d <= 25 ? 13 : (d <= 49 ? 11 : 0));
+        }
+        t[y] = line;
+    }
+    tile_lamp = load(t, 1);
+    // El público: 4 tiles en la VRAM (arriba y abajo de las dos personas); sus 3 dibujos, en la RAM
+    for (u16 frame = 0; frame < 3; frame++)
+        for (u16 person = 0; person < 2; person++)
+            draw_person(&crowd_tiles[(frame * 4 + person * 2) * 8], frame, person);
+    tile_crowd = load(crowd_tiles, 4);
+    // El rayo: un sprite de 16x32 (2x4 tiles, columna por columna) en zigzag, blanco con borde amarillo
+    // (colores 1 y 2 de la paleta 2)
+    u8 bolt[32][16];
+    memset(bolt, 0, sizeof(bolt));
+    for (s16 y = 0; y < 32; y++)
+    {
+        const s16 phase = y % 16;
+        const s16 cx = 4 + (phase < 8 ? phase : 16 - phase);    // va y viene entre x = 4 y 12
+        for (s16 dx = -2; dx <= 2; dx++)
+        {
+            const s16 x = cx + dx;
+            if (x >= 0 && x < 16) bolt[y][x] = abs(dx) <= 1 ? 1 : 2;
+        }
+    }
+    u32 b[32];
+    for (u16 col = 0; col < 2; col++)
+        for (u16 row = 0; row < 4; row++)
+            for (u16 y = 0; y < 8; y++)
+            {
+                u32 line = 0;
+                for (u16 x = 0; x < 8; x++) line = (line << 4) | bolt[row * 8 + y][col * 8 + x];
+                b[(col * 4 + row) * 8 + y] = line;
+            }
+    tile_bolt = load(b, 8);
+}
+
 static void make_hud_tiles(void)
 {
     u32 t[8];
@@ -368,6 +448,7 @@ void gfx_init(void)
     }
 
     make_hud_tiles();
+    make_stage_tiles();
 
     // Logo: un tile sólido por renglón de las letras, del amarillo al morado (PAL2 5-11)
     tile_logo = next_tile;

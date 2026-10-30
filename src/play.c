@@ -56,6 +56,9 @@
 #define PRACTICE_BACK   120             // marca de inicio (A en la pausa): 2 s antes de donde pausaste
 #define PRACTICE_MIN    240             // el bucle marcado debe durar al menos 4 s
 
+#define BOLT_FRAMES     10              // el rayo de una frase estelar completa
+#define BOLT_SEGMENTS   5               // sprites de 32 px, del fondo de la autopista a los aros
+
 #define RESULTS_DELAY   60              // cuadros entre el fin de la música y los resultados
 #define FAIL_DELAY      150             // y entre perder y los resultados
 
@@ -128,6 +131,9 @@ typedef struct {
     bool muted;
     u16 hud_dirty;              // HUD_LIFE
     u16 meter_col, meter_row;   // el medidor de vida
+    u16 bolt_timer;             // el rayo de la última frase estelar (cuadros que le quedan)
+    u16 bolt_col;               // y la columna donde cae (la de la última nota de la frase)
+    u16 star_col;               // la columna de la última nota estelar que se resolvió
     u16 pad;                    // su control (con un jugador, los dos)
     u16 pressed;                // botones presionados desde el paso anterior (con VELOCIDAD, varios cuadros)
     Score *s;
@@ -196,6 +202,9 @@ static void phrase_finish(Player *p)
 {
     if (p->phrase_ok)
     {
+        p->bolt_timer = BOLT_FRAMES;    // un rayo cae sobre el carril de la última nota, y las luces destellan
+        p->bolt_col = p->star_col;
+        stage_flash();
         p->s->star_energy = min(STAR_MAX, p->s->star_energy + STAR_PHRASE);
         if (!p->failed) p->life = min(LIFE_MAX, p->life + LIFE_STAR);
         p->s->hud_dirty |= HUD_STAR;
@@ -267,6 +276,12 @@ static void resolve_gems(Player *p)
         if ((g->hit | g->missed) != g->mask) break;
         p->resolve++;
         if (!(g->flags & CHART_STAR)) continue;
+        for (u16 lane = 0; lane < NUM_LANES; lane++)
+            if ((g->mask >> lane) & 1)
+            {
+                p->star_col = p->lane_col[lane];
+                break;
+            }
         if (!p->phrase_active)
         {
             p->phrase_active = TRUE;
@@ -623,6 +638,19 @@ static void draw_tail(const Player *p, u16 lane, s32 d0, s32 d1)
     }
 }
 
+// El rayo: sprites en zigzag apilados sobre la columna, cada uno donde la columna pasa a su altura
+static void draw_bolt(Player *p)
+{
+    if (!p->bolt_timer) return;
+    p->bolt_timer--;
+    for (u16 i = 0; i < BOLT_SEGMENTS; i++)
+    {
+        const u16 y = HWY_TOP + i * 32;
+        sprite(col_x(p, p->bolt_col, line_scale[y + 16]) - 8, y, SPRITE_SIZE(2, 4),
+               TILE_ATTR_FULL(PAL2, 1, 0, (p->bolt_timer >> 1) & 1, tile_bolt));
+    }
+}
+
 static void draw_flames(Player *p)
 {
     for (u16 col = 0; col < p->cols; col++)
@@ -706,6 +734,7 @@ static void draw_sprites(void)
 {
     // De arriba abajo en prioridad: llamaradas, gemas, colas y aros (las gemas pasan sobre los aros)
     sprites = 0;
+    for (u16 i = 0; i < nplayers; i++) draw_bolt(&players[i]);
     for (u16 i = 0; i < nplayers; i++) draw_flames(&players[i]);
     for (u16 i = 0; i < nplayers; i++) draw_gems(&players[i]);
     for (u16 i = 0; i < nplayers; i++) draw_tails(&players[i]);
@@ -777,21 +806,9 @@ static void draw_stage(void)
     VDP_fillTileMapRect(BG_B, TILE_ATTR_FULL(PAL0, 1, 0, 0, tile_solid + 11), 0, STRIP_ROW, 40, 4);
     draw_text_center(WINDOW, song->title, 27, PAL1);
 
+    stage_draw(nplayers);
     if (nplayers == 1)
     {
-        // Bocinas a los lados: cajas oscuras con dos conos
-        for (u16 side = 0; side < 2; side++)
-        {
-            const u16 x = side ? 35 : 1;
-            VDP_fillTileMapRect(BG_B, TILE_ATTR_FULL(PAL0, 1, 0, 0, tile_solid + 11), x, 13, 4, 11);
-            VDP_fillTileMapRect(BG_B, TILE_ATTR_FULL(PAL0, 1, 0, 0, tile_solid + 9), x + 1, 14, 2, 3);
-            VDP_fillTileMapRect(BG_B, TILE_ATTR_FULL(PAL0, 1, 0, 0, tile_solid + 10), x + 1, 15, 2, 1);
-            VDP_fillTileMapRect(BG_B, TILE_ATTR_FULL(PAL0, 1, 0, 0, tile_solid + 9), x + 1, 19, 2, 3);
-            VDP_fillTileMapRect(BG_B, TILE_ATTR_FULL(PAL0, 1, 0, 0, tile_solid + 10), x + 1, 20, 2, 1);
-            // Un haz de luz desde arriba
-            for (u16 y = 0; y < 10; y++)
-                VDP_fillTileMapRect(BG_B, TILE_ATTR_FULL(PAL0, 1, 0, 0, tile_solid + 4), side ? x - y / 4 : x + 1 + y / 4, y, 2, 1);
-        }
         draw_text(BG_B, instrument_names[players[0].instrument], 1, 2, PAL0);
         draw_text(BG_B, difficulty_names[players[0].difficulty], 1, 3, PAL1);
         if (!no_fail) draw_text(BG_B, "VIDA", players[0].meter_col, players[0].meter_row - 1, PAL1);
@@ -943,7 +960,7 @@ static void start_player(u16 i, u16 instrument, u16 difficulty, s16 cx)
     p->s = coop ? &band : &scores[i];
     // El medidor de vida: con un jugador junto a la autopista; con dos, en las orillas
     p->meter_col = nplayers == 1 ? 31 : (i ? 39 : 0);
-    p->meter_row = nplayers == 1 ? 15 : 9;
+    p->meter_row = nplayers == 1 ? 13 : 9;
 }
 
 static void start(void)
@@ -1079,6 +1096,19 @@ static bool step(RunEnd *how)
     return (fail_timer && !--fail_timer) || now > song->end_frame + RESULTS_DELAY;
 }
 
+// El escenario reacciona al combo más alto (en Co-Op, el de la banda), al poder estelar y a si todos perdieron
+static void update_scene(void)
+{
+    u16 combo = 0;
+    bool all_failed = TRUE;
+    for (u16 i = 0; i < nplayers; i++)
+    {
+        combo = max(combo, players[i].s->combo);
+        all_failed &= players[i].failed;
+    }
+    stage_update(now, song, combo, star_power_any(), all_failed);
+}
+
 static RunEnd run(void)
 {
     for (;;)
@@ -1108,6 +1138,7 @@ static RunEnd run(void)
         view = quarters > 0 ? ((u32) quarters * speed) >> 10 : 0;
         sfx_update();           // los efectos van por cuadros, no por pasos
 
+        update_scene();
         update_miss_fx();
         scroll_highway();
         draw_sprites();

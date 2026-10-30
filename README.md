@@ -16,6 +16,7 @@ del Cartucho*, *Noche sin Estrellas*, *Carrera de Fuego*, *Brisa de Verano* (sur
 *Amanecer Digital* (trance).
 
 ![Juego](docs/juego.png)
+![Dos jugadores en Co-Op](docs/coop.png)
 
 ## Sobre este proyecto
 
@@ -145,6 +146,18 @@ Son las de NESBand:
   sin tocarla solo calla tu instrumento. Un acorde suma la vida de una sola nota.
 - **Estrellas:** salen del puntaje (sin el poder estelar ni las colas) contra el puntaje perfecto: 20, 40,
   60, 80 y 95%.
+
+**Escenario:** alrededor de la autopista hay un escenario de concierto (bocinas, torres con su foco y su haz
+de luz) y, abajo a los lados, el **público**. Reacciona a cómo juegas, como en NESBand:
+
+- Sin combo (menos de 10), el público está quieto.
+- Con combo, levanta los brazos y **salta al empezar cada tiempo de la canción**, y la luz late con él.
+- Con el **poder estelar** activo, las luces cambian de color en cada tiempo (cian, rojo, amarillo y violeta).
+- Al completar una **frase estelar** cae un **rayo** sobre el carril de su última nota y las luces destellan.
+- Si pierden todos, las luces se apagan.
+
+Con 2 jugadores, el escenario es una torre con dos focos en el centro, entre las dos autopistas. Casi no
+cuesta CPU: las luces son dos colores de la paleta y el público son 4 tiles que se redibujan por DMA.
 
 **Récords:** el cartucho guarda el mejor puntaje de cada **canción, instrumento y dificultad**. En el menú,
 debajo de FALLO, ves el récord de lo que elegiste (`0029920 ABC *****`: puntaje, iniciales y estrellas, o

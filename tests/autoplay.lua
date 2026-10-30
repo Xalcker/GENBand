@@ -336,6 +336,11 @@ emu.register_frame_done(function()
                 end
             end
             if shot_at and frame == shot_at then snapshot("aire") end
+            -- La primera frase estelar completa (la barra del jugador 1 sube): una captura del rayo
+            if sym.scores and not shots.rayo and mem:read_u16(sym.scores + 18) > 0 then
+                shots.rayo = frame + 3
+            end
+            if shots.rayo and frame == shots.rayo then snapshot("rayo") end
             if now == 1200 and not shots.juego then
                 shots.juego = true
                 snapshot("juego")
