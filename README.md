@@ -325,7 +325,7 @@ que sin tocar se pierda, que SIN FALLO llegue al final, que los golpes al aire r
 las velocidades se puedan jugar perfecto, que la práctica se repita y que sus marcas cambien el bucle, que un récord se
 guarde con sus iniciales y siga ahí al volver a encender, que la batería se pueda jugar perfecto, que con
 2 jugadores VS haya empate con el mismo chart y que gane el otro si uno pierde, que en Co-Op la banda haga
-todas las notas y siga si un jugador cae, y que el audio suene. El bot toca con los dos controles. El bot llega a las opciones como un jugador (`GENBAND_OPTS`). Cada caso deja en
+todas las notas y siga si un jugador cae, que el audio suene y que no se pierdan cuadros. El bot toca con los dos controles. El bot llega a las opciones como un jugador (`GENBAND_OPTS`). Cada caso deja en
 `build/test-<nombre>/` las capturas, el audio (`audio.wav`) y el registro. `tests/run_tests.sh '*-nada'`
 corre solo los casos que coinciden; `--no-build` usa la ROM que ya está.
 
@@ -351,6 +351,12 @@ mismo volumen (MAME/JS 1.00); la música del título, 0.86.
   juzgan y se dibujan. El formato del chart es el de NESBand: pares (cuadros desde la anterior, carriles).
 - **La música:** `src/music.c` aplica una vez por cuadro las escrituras del flujo; el Z80 se queda detenido
   con el bus pedido para que el 68000 pueda escribir en el YM2612.
+- **El tiempo de CPU:** la interrupción de cada línea se lleva ~40% del 68000, así que el bucle del juego
+  tiene que caber en lo que queda: si no cabe, ese cuadro se pierde y la canción (y la música) se atrasa. Por
+  eso los sprites se escriben directo en la tabla de SGDK, las cuentas por sprite son de 16 bits (las de 32
+  van a libgcc, que es lenta en el 68000), el marcador va a la VRAM en una transferencia por parte y solo si
+  cambió, y con 2 jugadores cada marcador se redibuja un cuadro sí y otro no. Las pruebas de MAME revisan
+  que no se pierdan cuadros.
 
 ## Hoja de ruta
 

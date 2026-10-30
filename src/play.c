@@ -101,6 +101,9 @@ typedef struct {
     bool star_active;
     u16 hud_dirty;              // HUD_SCORE, HUD_COMBO, HUD_STAR
     u16 hud_x;                  // columna de la ventana donde va su marcador
+    // Lo que se manda a la VRAM (por la cola de DMA, que los lee en la vblank: no se tocan hasta el cuadro
+    // siguiente); la barra se compara para mandarla solo si cambió
+    u16 hud_score[7], hud_combo[7], hud_star[STARBAR_TILES];
 } Score;
 
 typedef struct {
@@ -137,6 +140,7 @@ typedef struct {
     u16 pad;                    // su control (con un jugador, los dos)
     u16 pressed;                // botones presionados desde el paso anterior (con VELOCIDAD, varios cuadros)
     Score *s;
+    u16 hud_meter[METER_TILES]; // el medidor en la VRAM (como los de Score)
 } Player;
 
 static Player players[MAX_PLAYERS];
@@ -178,9 +182,12 @@ static inline u32 wy(u16 frame)
     return ((u32) frame * speed) >> 8;
 }
 
+// (se llama por cada sprite: todo cabe en 16 bits, así que basta un muls.w del 68000; con s32, gcc llama
+// dos veces a __mulsi3 de libgcc, que es mucho más lenta)
 static inline s16 col_x(const Player *p, u16 col, u16 scale)
 {
-    return p->cx + (((s32) (2 * col + 1 - p->cols) * (p->col_w / 2) * scale) >> 8);
+    const s16 offset = (s16) (2 * col + 1 - p->cols) * (s16) (p->col_w / 2);     // (hasta ±80)
+    return p->cx + (s16) (((s32) offset * (s16) scale) >> 8);
 }
 
 static bool star_power_any(void)
@@ -605,11 +612,17 @@ static bool phrase_failed_at(const Player *p, u16 n)
 
 static u16 sprites;
 
-static void sprite(s16 x, s16 y, u8 size, u16 attr)
+// Directo a la copia de la tabla de sprites de SGDK (lo que hace VDP_setSpriteFull, pero sin la llamada
+// con 6 argumentos en la pila: se llama decenas de veces por cuadro)
+static inline void sprite(s16 x, s16 y, u8 size, u16 attr)
 {
     if (sprites >= MAX_SPRITES) return;
-    VDP_setSpriteFull(sprites, x, y, size, attr, sprites + 1);
+    VDPSprite *s = &vdpSpriteCache[sprites];
+    s->y = y + 0x80;
     sprites++;
+    s->size_link = (size << 8) | sprites;
+    s->attribut = attr;
+    s->x = x + 0x80;
 }
 
 // Profundidad (píxeles del mundo por delante de los aros) del cuadro f
@@ -743,25 +756,61 @@ static void draw_sprites(void)
     VDP_updateSprites(sprites, DMA_QUEUE);
 }
 
+// El marcador cuesta poco CPU, que en los cuadros con aciertos no sobra (la interrupción de cada línea
+// se lleva ~40%): cada parte va a la VRAM en una sola transferencia de la cola de DMA, desde su arreglo
+// (no con queue_text/queue_tile, que pasan por varias funciones de SGDK y copian, por cada tile), y las
+// cifras salen con la división de 16 bits del 68000 en vez de la de 32 de libgcc.
+static void hud_send(VDPPlane plane, u16 *tiles, u16 x, u16 y, u16 n, u16 step)
+{
+    DMA_queueDmaFast(DMA_VRAM, tiles, VDP_getPlaneAddress(plane, x, y), n, step);
+}
+
+// `digits` cifras de `value` (hasta 9999999), con ceros a la izquierda
+static void put_digits(u16 *out, u32 value, u16 digits, u16 attr)
+{
+    if (value > 9999999) value = 9999999;
+    const u16 high = divu(value, 10000);            // (cabe en 16 bits: hasta 999)
+    u16 low = value - (u32) high * 10000;
+    u16 rest = high;
+    for (u16 i = digits; i--; )
+    {
+        u16 *n = (digits - 1 - i < 4) ? &low : &rest;
+        out[i] = attr + TILE_FONT_INDEX + 16 + *n % 10;
+        *n /= 10;
+    }
+}
+
 static void draw_score(Score *s)
 {
     const u16 x = s->hud_x;
     if (s->hud_dirty & HUD_SCORE)
-        queue_number(WINDOW, s->score, 7, x + 9, 25, PAL0);
+    {
+        put_digits(s->hud_score, s->score, 7, TILE_ATTR(PAL0, 1, 0, 0));
+        hud_send(WINDOW, s->hud_score, x + 9, 25, 7, 2);
+    }
     if (s->hud_dirty & HUD_COMBO)
     {
-        queue_number(WINDOW, s->combo, 4, x + 9, 26, PAL0);
-        char m[3] = { 'X', '0' + s->multiplier, 0 };
-        queue_text(WINDOW, m, x + 14, 26, s->multiplier > 1 ? PAL2 : PAL0);
+        // "CCCC Xm": el combo, un espacio y el multiplicador (en otro color si es más de 1)
+        const u16 mult = TILE_ATTR(s->multiplier > 1 ? PAL2 : PAL0, 1, 0, 0) + TILE_FONT_INDEX;
+        put_digits(s->hud_combo, min(s->combo, 9999), 4, TILE_ATTR(PAL0, 1, 0, 0));
+        s->hud_combo[4] = TILE_ATTR(PAL0, 1, 0, 0) + TILE_FONT_INDEX;
+        s->hud_combo[5] = mult + 'X' - 32;
+        s->hud_combo[6] = mult + '0' - 32 + s->multiplier;
+        hud_send(WINDOW, s->hud_combo, x + 9, 26, 7, 2);
     }
     if (s->hud_dirty & HUD_STAR)
+    {
+        bool changed = FALSE;
         for (u16 i = 0; i < STARBAR_TILES; i++)
         {
             const s16 fill = (s16) s->star_energy - i * 8;
             const u16 level = fill <= 0 ? 0 : (fill >= 8 ? 8 : fill);
-            queue_tile(WINDOW, TILE_ATTR_FULL(PAL3, 1, 0, 0, tile_starbar + (s->star_active ? 9 : 0) + level),
-                       x + 1 + i, STRIP_ROW);
+            const u16 tile = TILE_ATTR_FULL(PAL3, 1, 0, 0, tile_starbar + (s->star_active ? 9 : 0) + level);
+            changed |= tile != s->hud_star[i];
+            s->hud_star[i] = tile;
         }
+        if (changed) hud_send(WINDOW, s->hud_star, x + 1, STRIP_ROW, STARBAR_TILES, 2);
+    }
     s->hud_dirty = 0;
 }
 
@@ -769,23 +818,34 @@ static void draw_meter(Player *p)
 {
     if (!(p->hud_dirty & HUD_LIFE) || no_fail) return;
     const u16 color = p->life < LIFE_MAX / 4 ? 2 : (p->life < LIFE_MAX * 5 / 8 ? 1 : 0);
+    bool changed = FALSE;
     for (u16 i = 0; i < METER_TILES; i++)
     {
         const s16 fill = (s16) p->life - (METER_TILES - 1 - i) * 8;
         const u16 level = fill <= 0 ? 0 : (fill >= 8 ? 8 : fill);
-        queue_tile(BG_B, TILE_ATTR_FULL(PAL3, 1, 0, 0, tile_meter + color * 9 + level),
-                   p->meter_col, p->meter_row + i);
+        const u16 tile = TILE_ATTR_FULL(PAL3, 1, 0, 0, tile_meter + color * 9 + level);
+        changed |= tile != p->hud_meter[i];
+        p->hud_meter[i] = tile;
     }
+    // (una columna: el VDP avanza una fila del plano por palabra)
+    if (changed) hud_send(BG_B, p->hud_meter, p->meter_col, p->meter_row, METER_TILES, planeWidth * 2);
     p->hud_dirty = 0;
 }
 
+// Con dos jugadores, cada uno se redibuja un cuadro sí y otro no (lo pendiente queda marcado para su
+// turno): los dos marcadores en el mismo cuadro, con la pantalla llena de gemas, no caben en un cuadro, y
+// un cuadro de retraso en el marcador no se nota. En Co-Op, la banda va en el turno del jugador 1.
 static void draw_hud(void)
 {
+    static u16 turn;
+    turn = nplayers == 2 ? turn ^ 1 : 0;
     if (coop)
-        draw_score(&band);
+    {
+        if (!turn) draw_score(&band);
+    }
     else
-        for (u16 i = 0; i < nplayers; i++) draw_score(&scores[i]);
-    for (u16 i = 0; i < nplayers; i++) draw_meter(&players[i]);
+        draw_score(&scores[turn]);
+    draw_meter(&players[turn]);
 }
 
 // --- Escenario -------------------------------------------------------------------------------------

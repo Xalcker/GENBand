@@ -48,11 +48,12 @@ run_case() {
         fails=$((fails + 1))
         return
     fi
-    python3 - "$dir" "$mode" "$name" "$players" "$mode2" <<'PY' || fails=$((fails + 1))
+    python3 - "$dir" "$mode" "$name" "$players" "$mode2" "$opts" <<'PY' || fails=$((fails + 1))
 import math, struct, sys, wave
 from pathlib import Path
 d, mode, name = Path(sys.argv[1]), sys.argv[2], sys.argv[3]
 players, mode2 = int(sys.argv[4]), sys.argv[5]
+opts = sys.argv[6]
 r = dict(line.strip().split("=", 1) for line in open(d / "resultado.txt") if "=" in line)
 n = {k: int(v) for k, v in r.items() if v.lstrip("-").isdigit()}
 problems = []
@@ -105,6 +106,18 @@ if players:
             problems.append(f"en Co-Op, con J2 caído la banda debe seguir (J2 cayó {n['j2_fallo']}, banda perdió {n['banda_fallo']})")
     if mode2 == "nada" and players == 1 and n["notas"] == n["total"]:
         problems.append("en VS, si J2 pierde la partida se corta: J1 no debía terminar la canción")
+# Cuadros perdidos: el bot anota cada 600 cuadros en qué cuadro de la canción va; si un cuadro del juego
+# no cabe en uno de la consola, la canción (y la música) se atrasa. Con VELOCIDAD los pasos por cuadro
+# cambian a propósito, así que ahí no se mide.
+if "velocidad" not in opts:
+    marks = []
+    for line in open(d / "bot.log"):
+        if "cuadro de la canción" in line and "jugando" in line:
+            f = line.split()
+            marks.append((int(f[0]), int(f[7].rstrip(","))))
+    lost = sum(600 - (b[1] - a[1]) for a, b in zip(marks, marks[1:]) if b[0] - a[0] == 600 and 0 < b[1] - a[1] <= 600)
+    r["perdidos"] = str(lost)
+    if lost > 5: problems.append(f"se perdieron {lost} cuadros (el bucle del juego no cupo en un cuadro)")
 # El audio: que haya sonado algo durante el juego
 try:
     w = wave.open(str(d / "audio.wav"))
@@ -127,7 +140,7 @@ extra = ""
 if players:
     extra = f", J2 {n['j2_notas']}/{n['j2_total']} fallo {n['j2_fallo']}"
     extra += f", ganador {n['ganador']}" if players == 1 else f", banda {n['banda_puntaje']} {n['banda_estrellas']}*"
-summary = f"notas {n['notas']}/{n['total']}, puntaje {n['puntaje']}, estrellas {n['estrellas']}, combo {n['combo_max']}, fallo {n['fallo']}, audio RMS {r.get('audio_rms')}{extra}"
+summary = f"notas {n['notas']}/{n['total']}, puntaje {n['puntaje']}, estrellas {n['estrellas']}, combo {n['combo_max']}, fallo {n['fallo']}, audio RMS {r.get('audio_rms')}, cuadros perdidos {r.get('perdidos', '-')}{extra}"
 print(("FALLA " if problems else "ok    ") + f"{name}: {summary}" + ("".join(f"\n      - {p}" for p in problems)))
 sys.exit(1 if problems else 0)
 PY
