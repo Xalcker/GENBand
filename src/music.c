@@ -7,10 +7,16 @@
 //   $62          fin del cuadro
 //   $7n          fin del cuadro y n cuadros más sin escrituras
 //   $61 lo hi    fin del cuadro y N cuadros más sin escrituras
+//   $54 n        tocar el sample n del DAC (la tabla de la canción, Song.dac)
 //   $66          fin (o vuelta al bucle)
 //
-// Corre en el 68000, así que el Z80 se queda detenido (con el bus pedido, que es lo que deja al 68000
-// escribir en el YM2612).
+// Corre en el 68000. El Z80 tiene el driver PCM de SGDK, que toca los samples del DAC (la batería
+// sampleada de los VGM de otros juegos): el 68000 pide el bus del Z80 solo mientras escribe en el YM2612
+// (los dos no pueden usar sus puertos a la vez), y antes de soltarlo vuelve a elegir el registro $2A (el
+// dato del DAC), porque el driver solo escribe el dato y da por hecho que ese registro sigue elegido.
+// Mientras el 68000 tiene el bus el driver se detiene: en un cuadro son unas decenas de escrituras, y no
+// se nota. El DAC se apaga ($2B) al empezar cada canción, para que el canal FM 6 suene en las que no lo
+// usan; la canción lo enciende si lo usa.
 //
 // Efectos de sonido (sfx_play): van en el tercer tono del PSG, con el mismo formato de flujo. Mientras
 // suena uno, lo que la canción le escribe a ese canal solo se recuerda, y al terminar se restaura.
@@ -30,6 +36,7 @@
 #define PSG_DATA  (*(vu8 *) 0xC00011)
 
 #define CH_PSG    6             // primer canal del PSG en la máscara (6-8 tonos, 9 ruido)
+#define CH_DAC    10
 #define TL_SILENT 0x7F
 
 static const u8 *start;
@@ -38,6 +45,11 @@ static u16 loop_offset;
 static u16 wait;                // cuadros que faltan para la siguiente tanda de escrituras
 static bool paused;
 static bool seeking;            // music_seek: adelantando sin que suene nada
+
+static bool bus_taken;          // el 68000 tiene el bus del Z80 (ver ym_write y ym_done)
+static const DacSample *dac;    // los samples de la canción que suena
+static s16 dac_next = -1;       // el sample que hay que tocar al soltar el bus (-1 = ninguno)
+static bool dac_stop;           // callar el DAC al soltar el bus
 
 static u16 muted;               // canales silenciados
 static u8 fm_tl[6][4];          // TL que pide la canción, por canal y operador (en el orden de los registros)
@@ -54,6 +66,11 @@ static const u8 carriers[8] = { 0x8, 0x8, 0x8, 0x8, 0xC, 0xE, 0xE, 0xF };
 
 static void ym_write(u16 port, u8 reg, u8 value)
 {
+    if (!bus_taken)
+    {
+        Z80_requestBus(TRUE);
+        bus_taken = TRUE;
+    }
     while (YM_ADDR0 & 0x80);
     if (port)
     {
@@ -64,6 +81,30 @@ static void ym_write(u16 port, u8 reg, u8 value)
     {
         YM_ADDR0 = reg;
         YM_DATA0 = value;
+    }
+}
+
+// Al terminar una tanda de escrituras: el registro del DAC elegido otra vez, el bus de vuelta al Z80 y lo
+// que haya que pedirle al driver (que pide el bus por su cuenta)
+static void ym_done(void)
+{
+    if (bus_taken)
+    {
+        while (YM_ADDR0 & 0x80);
+        YM_ADDR0 = 0x2A;
+        Z80_releaseBus();
+        bus_taken = FALSE;
+    }
+    if (dac_stop)
+    {
+        SND_PCM_stopPlay();
+        dac_stop = FALSE;
+    }
+    if (dac_next >= 0)
+    {
+        const DacSample *s = &dac[dac_next];
+        SND_PCM_startPlay(s->data, s->length, s->rate, SOUND_PAN_CENTER, FALSE);
+        dac_next = -1;
     }
 }
 
@@ -153,6 +194,8 @@ void sfx_update(void)
 
 static void silence(void)
 {
+    dac_next = -1;
+    dac_stop = TRUE;
     for (u16 code = 0; code < 7; code++)
         if (code != 3) ym_write(0, 0x28, code);
     for (u16 ch = 0; ch < 4; ch++)
@@ -161,19 +204,22 @@ static void silence(void)
 
 void music_init(void)
 {
-    // El Z80 no hace nada (el reproductor corre en el 68000): se queda con el bus pedido para siempre
-    Z80_requestBus(TRUE);
+    // El driver del Z80 enciende el DAC al arrancar: se apaga aquí (cada canción lo enciende si lo usa)
+    Z80_loadDriver(Z80_DRIVER_PCM, TRUE);
     ptr = NULL;
     muted = 0;
     ym_write(0, 0x22, 0);
     ym_write(0, 0x27, 0);
     ym_write(0, 0x2B, 0);
     silence();
+    ym_done();
 }
 
-void music_play(const u8 *stream, u16 loop)
+static void play(const u8 *stream, const DacSample *samples, u16 loop)
 {
     silence();
+    ym_write(0, 0x2B, 0);
+    dac = samples;
     start = ptr = stream;
     loop_offset = loop;
     wait = 0;
@@ -185,10 +231,17 @@ void music_play(const u8 *stream, u16 loop)
     memset(psg_tone, 0, sizeof(psg_tone));
 }
 
+void music_play(const u8 *stream, const DacSample *samples, u16 loop)
+{
+    play(stream, samples, loop);
+    ym_done();
+}
+
 void music_stop(void)
 {
     ptr = NULL;
     silence();
+    ym_done();
 }
 
 bool music_playing(void)
@@ -203,7 +256,8 @@ void music_pause(bool pause)
     if (pause)
         silence();
     else
-        for (u16 ch = 0; ch < 4; ch++) psg_apply(ch);   // el FM vuelve a sonar en su siguiente nota
+        for (u16 ch = 0; ch < 4; ch++) psg_apply(ch);   // el FM y el DAC vuelven a sonar en su siguiente nota
+    ym_done();
 }
 
 void music_mute(u16 channels, bool mute)
@@ -215,6 +269,8 @@ void music_mute(u16 channels, bool mute)
         if ((changed >> ch) & 1) fm_apply(ch);
     for (u16 ch = 0; ch < 4; ch++)
         if ((changed >> (CH_PSG + ch)) & 1) psg_apply(ch);
+    if (((changed & muted) >> CH_DAC) & 1) dac_stop = TRUE;    // (al acertar, suena desde el siguiente golpe)
+    ym_done();
 }
 
 // Un cuadro de la música: las escrituras que tocan y, si toca, la espera hasta las siguientes
@@ -236,6 +292,15 @@ static void music_step(void)
         }
         else if (cmd == 0x50)
             psg(*ptr++);
+        else if (cmd == 0x54)
+        {
+            const u8 n = *ptr++;
+            if (dac && !seeking && !((muted >> CH_DAC) & 1))
+            {
+                dac_next = n;
+                dac_stop = FALSE;
+            }
+        }
         else if (cmd == 0x62)
             return;
         else if ((cmd & 0xF0) == 0x70)
@@ -271,14 +336,17 @@ void music_update(void)
 void music_advance(void)
 {
     if (!paused) music_step();
+    ym_done();
 }
 
-void music_seek(const u8 *stream, u16 frames)
+void music_seek(const u8 *stream, const DacSample *samples, u16 frames)
 {
     // Se aplican todas las escrituras (así cada canal queda con su sonido y su volumen) salvo los
-    // key-on, que se vuelven key-off: nada suena hasta la primera nota después del punto pedido
-    music_play(stream, MUSIC_NO_LOOP);
+    // key-on, que se vuelven key-off, y los golpes del DAC: nada suena hasta la primera nota después del
+    // punto pedido
+    play(stream, samples, MUSIC_NO_LOOP);
     seeking = TRUE;
     while (frames-- && ptr) music_step();
     seeking = FALSE;
+    ym_done();
 }

@@ -28,10 +28,19 @@ ROM="$PWD/build/genband.bin"
 SYM="$PWD/build/genband.sym"
 fails=0
 
-# caso: nombre canción instrumento dificultad modo [opciones] [nvram]
+# El lugar de una canción en el menú (por su carpeta de src/songs/): el orden de build/song_list.c, que
+# cambia según las canciones importadas que haya
+song_index() {
+    grep '^    &song_' build/song_list.c | grep -n "&song_$1,\?$" | cut -d: -f1 | awk '{print $1 - 1}'
+}
+
+# caso: nombre canción instrumento dificultad modo [opciones] [nvram]   (canción: su carpeta, "tormenta")
 # (con 2 jugadores: TWO="modo instrumento2 dificultad2 modo2" antes de run_case)
 run_case() {
     local name=$1 song=$2 instr=$3 diff=$4 mode=$5 opts=${6:-} nvram=${7:-}
+    if [ -n "$only" ] && [[ "$name" != $only ]]; then return; fi
+    song=$(song_index "$song")
+    if [ -z "$song" ]; then echo "FALLA $name: la canción $2 no está en build/song_list.c"; fails=$((fails + 1)); return; fi
     local players=0 instr2=0 diff2=0 mode2=perfecto
     if [ -n "${TWO:-}" ]; then read -r players instr2 diff2 mode2 <<< "$TWO"; fi
     if [ -n "$only" ] && [[ "$name" != $only ]]; then return; fi
@@ -146,41 +155,47 @@ sys.exit(1 if problems else 0)
 PY
 }
 
-# Las canciones van en el menú por orden alfabético del título: 0 Amanecer, 1 Brisa, 2 Carrera, 3 Cumbia,
-# 4 Luz de Luna, 5 Marcha, 6 Noche, 7 Primer Ensayo, 8 Salto, 9 Tormenta
-run_case tormenta-guitarra-experto 9 0 3 perfecto
-run_case tormenta-bajo-dificil     9 2 2 perfecto
-run_case tormenta-teclado-facil    9 1 0 perfecto
-run_case tormenta-nada             9 0 1 nada
-run_case tormenta-sinfallo         9 0 0 sinfallo
-run_case tormenta-mitad            9 0 3 mitad
-run_case tormenta-aire             9 0 2 aire
-run_case carrera-guitarra-experto  2 0 3 perfecto
-run_case cumbia-bajo-experto       3 2 3 perfecto
-run_case luna-teclado-dificil      4 1 2 perfecto
-run_case demo-guitarra-medio       7 0 1 perfecto
+# Las canciones originales (las de git; las importadas de otros juegos cambian su lugar en el menú, pero
+# run_case las busca por carpeta)
+run_case tormenta-guitarra-experto tormenta 0 3 perfecto
+run_case tormenta-bajo-dificil     tormenta 2 2 perfecto
+run_case tormenta-teclado-facil    tormenta 1 0 perfecto
+run_case tormenta-nada             tormenta 0 1 nada
+run_case tormenta-sinfallo         tormenta 0 0 sinfallo
+run_case tormenta-mitad            tormenta 0 3 mitad
+run_case tormenta-aire             tormenta 0 2 aire
+run_case carrera-guitarra-experto  carrera 0 3 perfecto
+run_case cumbia-bajo-experto       cumbia 2 3 perfecto
+run_case luna-teclado-dificil      luna 1 2 perfecto
+run_case demo-guitarra-medio       demo 0 1 perfecto
 # Récords: con la SRAM vacía, el juego perfecto es récord y se escriben las iniciales; al volver a
 # encender (la misma carpeta de nvram, que es donde MAME guarda la SRAM), el récord sigue ahí
 rm -rf "$PWD/build/test-nvram-records"
-run_case demo-record               7 0 1 record "" "$PWD/build/test-nvram-records"
-run_case demo-record-persiste      7 0 1 leer_record "" "$PWD/build/test-nvram-records"
+run_case demo-record               demo 0 1 record "" "$PWD/build/test-nvram-records"
+run_case demo-record-persiste      demo 0 1 leer_record "" "$PWD/build/test-nvram-records"
 # Batería: el bot toca los pads y el bombo (carril naranja, C)
-run_case tormenta-bateria-experto  9 3 3 perfecto
-run_case cumbia-bateria-facil      3 3 0 perfecto
+run_case tormenta-bateria-experto  tormenta 3 3 perfecto
+run_case cumbia-bateria-facil      cumbia 3 0 perfecto
 # Dos jugadores: VS con el mismo chart (empate), VS donde J2 pierde (la partida se corta y gana J1),
 # Co-Op perfecto (guitarra y bajo) y Co-Op con J2 caído (la banda sigue)
-TWO="1 0 3 perfecto" run_case vs-empate        9 0 3 perfecto
-TWO="1 0 3 nada"     run_case vs-j2-pierde     9 0 3 perfecto
-TWO="2 2 2 perfecto" run_case coop-perfecto    9 0 3 perfecto
-TWO="2 3 1 nada"     run_case coop-j2-cae      2 0 2 perfecto
+TWO="1 0 3 perfecto" run_case vs-empate        tormenta 0 3 perfecto
+TWO="1 0 3 nada"     run_case vs-j2-pierde     tormenta 0 3 perfecto
+TWO="2 2 2 perfecto" run_case coop-perfecto    tormenta 0 3 perfecto
+TWO="2 3 1 nada"     run_case coop-j2-cae      carrera 0 2 perfecto
 rm -rf "$PWD/build/test-nvram-vs"
-TWO="1 1 1 perfecto" run_case vs-record        7 0 1 record "" "$PWD/build/test-nvram-vs"
+TWO="1 1 1 perfecto" run_case vs-record        demo 0 1 record "" "$PWD/build/test-nvram-vs"
 # Opciones: espejo, velocidad (75% y 125%) y práctica (de 1/2 a 3/4: debe repetirse)
-run_case tormenta-espejo           9 0 3 perfecto "espejo=1"
-run_case tormenta-lenta            9 0 3 perfecto "velocidad=1"
-run_case tormenta-rapida           9 0 3 perfecto "velocidad=3 caida=4"
-run_case marcha-practica           5 0 2 practica "practica=3 inicio=2"
-run_case marcha-marcas             5 0 2 marcas "practica=4 inicio=1"
+run_case tormenta-espejo           tormenta 0 3 perfecto "espejo=1"
+run_case tormenta-lenta            tormenta 0 3 perfecto "velocidad=1"
+run_case tormenta-rapida           tormenta 0 3 perfecto "velocidad=3 caida=4"
+run_case marcha-practica           marcha 0 2 practica "practica=3 inicio=2"
+run_case marcha-marcas             marcha 0 2 marcas "practica=4 inicio=1"
+
+# La batería sampleada (DAC): solo si están las canciones de Sonic importadas (ver el README; no van en git)
+if [ -f src/songs/ghz/song.c ]; then
+    run_case ghz-bateria-experto   ghz 3 3 perfecto
+    TWO="1 3 3 perfecto" run_case ghz-vs-guitarra-bateria ghz 0 3 perfecto
+fi
 
 if [ $fails -gt 0 ]; then
     echo "$fails caso(s) fallaron"

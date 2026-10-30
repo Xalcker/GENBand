@@ -264,7 +264,9 @@ emu.register_frame_done(function()
 
     local s = screen()
     if frame % 600 == 0 then
-        note(string.format("pantalla %d, cuadro de la canción %d, estado %s, cola %d", s, mem:read_u16(sym.now), state, #queue))
+        -- (con vtimer y el PC del 68000: si el juego se colgara, vtimer dejaría de avanzar)
+        note(string.format("pantalla %d, cuadro de la canción %d, estado %s, cola %d, vtimer %d, pc %06X", s, mem:read_u16(sym.now),
+            state, #queue, sym.vtimer and mem:read_u32(sym.vtimer) or -1, manager.machine.devices[":maincpu"].state["PC"].value))
     end
     if state == "titulo" then
         if s == SCREEN_TITLE then

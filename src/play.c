@@ -988,7 +988,7 @@ static void practice_setup(void)
     now = practice_start;
     skip_frame = now + PRACTICE_GRACE;
     next_row = (wy(now) > 16) ? (wy(now) - 16) / 8 : 0;
-    if (now > SONG_LEAD_IN) music_seek(song->stream, now - SONG_LEAD_IN);
+    if (now > SONG_LEAD_IN) music_seek(song->stream, song->dac, now - SONG_LEAD_IN);
 }
 
 static void reset_score(Score *s, u16 notes, u16 hud_x)
@@ -1130,7 +1130,7 @@ static bool lost(void)
 // Un paso del juego: la música, el chart y el juicio de los botones. Devuelve TRUE si la partida terminó.
 static bool step(RunEnd *how)
 {
-    if (now == SONG_LEAD_IN) music_play(song->stream, MUSIC_NO_LOOP);
+    if (now == SONG_LEAD_IN) music_play(song->stream, song->dac, MUSIC_NO_LOOP);
     music_advance();
     for (u16 i = 0; i < nplayers; i++)
     {

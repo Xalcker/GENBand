@@ -1914,4 +1914,5 @@ const Song song_amanecer = {
         { 192, 384, 384, 384 },
         { 185, 427, 427, 445 }
     },
+    .dac = NULL,
 };

@@ -44,10 +44,9 @@ u16 trap_map[STRIP_ROW][40];
 static s16 line_offset[SCREEN_LINES + 1];   // lo que se resta al scroll en cada línea: profundidad + línea + 1
 static s16 scroll_table[SCREEN_LINES + 1];
 static vs16 next_base;          // -wy(now) del siguiente cuadro (lo pone el juego)
-vu8 hint_enabled;               // (los usa hint.s)
-const s16 *volatile hint_ptr;
-
+extern u32 hint_src;            // (hint.s) la dirección del siguiente valor, dentro de la instrucción que lo copia
 extern void hint_handler(void);
+extern void hint_idle(void);    // la interrupción sin efecto
 
 #define VDP_CTRL_L (*(vu32 *) VDP_CTRL_PORT)
 #define VDP_DATA_W (*(vu16 *) VDP_DATA_PORT)
@@ -55,7 +54,7 @@ extern void hint_handler(void);
 
 static void vint(void)
 {
-    hint_enabled = FALSE;       // hasta que SGDK termine con la cola de DMA
+    SYS_setHIntCallback(hint_idle);     // hasta que SGDK termine con la cola de DMA
 }
 
 static void vblank_done(void)
@@ -65,8 +64,8 @@ static void vblank_done(void)
     VDP_setAutoInc(0);
     VDP_CTRL_L = VSRAM_WRITE_0;
     VDP_DATA_W = scroll_table[0];
-    hint_ptr = &scroll_table[1];
-    hint_enabled = TRUE;
+    hint_src = (u32) &scroll_table[1];
+    SYS_setHIntCallback(hint_handler);
 }
 
 void perspective_set_scroll(u32 world_now)
@@ -78,11 +77,10 @@ void perspective_start(void)
 {
     SYS_disableInts();
     next_base = 0;
-    hint_enabled = FALSE;
-    hint_ptr = &scroll_table[1];
+    hint_src = (u32) &scroll_table[1];
     SYS_setVIntCallback(vint);
     SYS_setVBlankCallback(vblank_done);
-    SYS_setHIntCallback(hint_handler);
+    SYS_setHIntCallback(hint_idle);
     VDP_setHIntCounter(0);
     VDP_setHInterrupt(TRUE);
     SYS_enableInts();
@@ -93,7 +91,7 @@ void perspective_stop(void)
     // Primero se deja la interrupción sin efecto y se espera a la vblank; ya ahí (sin nada que compita
     // por el VDP) se apaga y se devuelve el autoincremento de siempre
     SYS_disableInts();
-    hint_enabled = FALSE;
+    SYS_setHIntCallback(hint_idle);
     SYS_setVIntCallback(NULL);
     SYS_setVBlankCallback(NULL);
     SYS_enableInts();

@@ -107,6 +107,7 @@ const CHANNELS = [
   { id: "psg2", label: "PSG 2", color: "#d0c860", discrete: false },
   { id: "psg3", label: "PSG 3", color: "#b8b050", discrete: false },
   { id: "ruido", label: "Ruido", color: "#ffb45e", discrete: true },
+  { id: "dac", label: "DAC", color: "#ff6b5e", discrete: true },
 ];
 const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
 const noteName = (p) => NOTE_NAMES[p % 12] + (Math.floor(p / 12) - 1);
@@ -325,7 +326,7 @@ function drawTimeline() {
     const lay = layouts[ch.id];
     ctx.fillText(lay.pitches.length ? `${(DATA.channels[ch.id] || []).length} notas` : "vacío", 8, top + 21);
     if (ch.discrete && lay.pitches.length > 1 && lay.pitches.length <= 6) {
-      for (const p of lay.pitches) ctx.fillText(ch.id === "ruido" ? `tipo ${p}` : noteName(p), 56, pitchY(ch, p, top) - 5);
+      for (const p of lay.pitches) ctx.fillText(ch.id === "ruido" ? `tipo ${p}` : ch.id === "dac" ? `sample ${p}` : noteName(p), 56, pitchY(ch, p, top) - 5);
     }
     ctx.font = "12px system-ui";
   });
@@ -1213,9 +1214,11 @@ if (DATA.editable && DATA.player) (function () {
         const res = await fetch("/api/player");
         const player = await res.json();
         if (!res.ok) throw new Error(player.error || res.statusText);
-        const stream = Uint8Array.from(atob(player.stream), (c) => c.charCodeAt(0));
+        const bytes = (b64) => Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+        const stream = bytes(player.stream);
+        const dac = player.dac.map((d) => ({ data: bytes(d.data), rate: d.rate }));
         const result = await GenPlayer.render(stream, player.frames, {
-          sampleRate: 44100,
+          sampleRate: 44100, dac,
           onProgress: (f) => status(`Preparando el audio… ${Math.round(f * 100)}%`),
           yieldFn: () => new Promise((r) => setTimeout(r)),
         });
@@ -1323,11 +1326,12 @@ if (DATA.editable && DATA.player) (function () {
     if (P.playing) pause(); else play();
   });
   window.addEventListener("beforeunload", pause);
-  // Teclas 1-9 y 0: silenciar FM 1-6, PSG 1-3 y el ruido (con Mayús: dejar solo ese)
+  // Teclas 1-9, 0 y -: silenciar FM 1-6, PSG 1-3, el ruido y el DAC (con Mayús: dejar solo ese)
   document.addEventListener("keydown", (e) => {
     if (e.ctrlKey || e.metaKey || e.altKey || e.target.closest("input, select, textarea, dialog")) return;
     const c = e.code.match(/^(?:Digit|Numpad)([0-9])$/);
-    if (c) { e.preventDefault(); toggleChannel(CHANNELS[(Number(c[1]) + 9) % 10].id, e.shiftKey ? "solo" : "mute"); }
+    const index = c ? (Number(c[1]) + 9) % 10 : (e.code === "Minus" || e.code === "NumpadSubtract") ? 10 : -1;
+    if (index >= 0) { e.preventDefault(); toggleChannel(CHANNELS[index].id, e.shiftKey ? "solo" : "mute"); }
   });
 })();
 </script>

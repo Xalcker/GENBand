@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .chart import DIFFICULTIES, BeatGrid, ChartNote, star_notes
-from .vgm import CHANNEL_NAMES, Note
+from .vgm import CHANNEL_NAMES, DacSample, Note
 
 NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
 
@@ -51,7 +51,7 @@ MIN_GROUP_HITS = 3   # sugerencia: grupos con menos golpes no se asignan
 
 @dataclass(frozen=True)
 class Group:
-    key: str  # "ruido:5" (el ruido, por tipo) o "fm6:G3" (un canal FM o PSG, por tono)
+    key: str  # "ruido:5" (el ruido, por tipo), "dac:2" (el DAC, por sample) o "fm6:G3" (un canal FM o PSG, por tono)
     channel: str
     pitch: int
     instrument: str
@@ -61,11 +61,21 @@ class Group:
 
     @property
     def tone(self) -> str:
+        if self.channel == "dac":
+            return f"sample {self.pitch}"
         return f"tipo {self.pitch}" if self.channel == "ruido" else midi_to_name(self.pitch)
 
 
+UNPITCHED = ("ruido", "dac")    # canales cuyos golpes se distinguen por tipo o sample, no por altura
+
+
 def group_key(channel: str, pitch: int) -> str:
-    return f"{channel}:{pitch}" if channel == "ruido" else f"{channel}:{midi_to_name(pitch)}"
+    return f"{channel}:{pitch}" if channel in UNPITCHED else f"{channel}:{midi_to_name(pitch)}"
+
+
+def channel_strikes(channel: str, ns: list[Note]) -> list[Note]:
+    """Los golpes de un canal (en el DAC cada nota ya es un golpe: uno que corta al anterior no es legato)."""
+    return sorted(ns, key=lambda n: n.frame) if channel == "dac" else strikes(ns)
 
 
 def strikes(ns: list[Note]) -> list[Note]:
@@ -87,7 +97,7 @@ def drum_groups(notes: dict[int, list[Note]], channels: list[int]) -> list[Group
     found: dict[str, tuple[str, list[Note]]] = {}
     for ch in channels:
         name = CHANNEL_NAMES[ch]
-        for note in strikes(notes.get(ch, [])):
+        for note in channel_strikes(name, notes.get(ch, [])):
             found.setdefault(group_key(name, note.pitch), (name, []))[1].append(note)
     groups = []
     for key, (channel, ns) in found.items():
@@ -106,10 +116,27 @@ NAME_HINTS = (
 )
 
 
-def suggest_assignment(groups: list[Group]) -> dict[str, dict]:
+DAC_MIN_SECONDS = 0.03   # samples más cortos son restos de un golpe cortado: no se sugieren
+DAC_COMMON = 6           # bombo y tarola: entre los que suenan al menos 1/6 de lo que suena el que más
+
+
+def sample_seconds(sample: DacSample) -> float:
+    return len(sample.data) / (32000, 22050, 16000, 13400, 11025, 8000)[sample.rate]
+
+
+def zero_crossings(sample: DacSample) -> float:
+    """Qué tan seguido cruza el cero un sample (por byte): bajo en un bombo, alto en una tarola o un platillo."""
+    data = [b - 256 if b >= 128 else b for b in sample.data]
+    rate = (32000, 22050, 16000, 13400, 11025, 8000)[sample.rate]
+    crossings = sum(1 for a, b in zip(data, data[1:]) if (a < 0) != (b < 0))
+    return crossings * rate / max(1, len(data))     # cruces por segundo: no depende de la frecuencia
+
+
+def suggest_assignment(groups: list[Group], dac_samples: list[DacSample] | None = None) -> dict[str, dict]:
     """Una primera asignación, por el canal y el tono.
 
-    En los canales FM o PSG, el tono más grave es el bombo y los siguientes son toms. En el ruido, el tipo:
+    En el DAC, por cómo suena cada sample (cruces por cero): el más grave es el bombo, el más ruidoso la
+    tarola y los demás toms (del más grave al más agudo: tom 3, 2, 1). En los canales FM o PSG, el tono más grave es el bombo y los siguientes son toms. En el ruido, el tipo:
     el blanco más agudo (4) es el hi-hat (platillo, amarillo), el siguiente (5) la tarola y los más graves
     (6, 7) toms; el periódico (0-3) son toms. Casi nunca acierta del todo con la música de otros juegos: es
     el punto de partida para corregir drums.json."""
@@ -121,7 +148,21 @@ def suggest_assignment(groups: list[Group]) -> dict[str, dict]:
         assignment[group.key] = {"lane": role, "cymbal": cymbal}
         used.add(role)
 
-    tonal = sorted((g for g in groups if g.channel != "ruido" and g.count >= MIN_GROUP_HITS), key=lambda g: g.pitch)
+    if dac_samples:
+        # Sin los restos (unos milisegundos de un golpe cortado), del más grave al más agudo
+        dac = sorted((g for g in groups if g.channel == "dac" and g.count >= MIN_GROUP_HITS and g.pitch < len(dac_samples)
+                      and sample_seconds(dac_samples[g.pitch]) >= DAC_MIN_SECONDS),
+                     key=lambda g: zero_crossings(dac_samples[g.pitch]))
+        # El bombo y la tarola salen de los que más suenan (un timbal que suena 3 veces no es el bombo)
+        common = [g for g in dac if g.count * DAC_COMMON >= max((g.count for g in dac), default=0)]
+        if common:
+            give(common[0], ["kick"])
+        if len(common) > 1:
+            give(common[-1], ["snare"])
+        for group in dac:
+            if assignment[group.key]["lane"] is None:
+                give(group, ["tom3", "tom2", "tom1"])
+    tonal = sorted((g for g in groups if g.channel not in UNPITCHED and g.count >= MIN_GROUP_HITS), key=lambda g: g.pitch)
     for index, group in enumerate(tonal):
         give(group, ["kick", "tom3", "tom2", "tom1"] if index == 0 else ["tom3", "tom2", "tom1"])
     for group in sorted((g for g in groups if g.channel == "ruido" and g.count >= MIN_GROUP_HITS), key=lambda g: g.pitch):
@@ -185,7 +226,7 @@ class Hit:
 def drum_hits(notes: dict[int, list[Note]], channels: list[int], assignment: dict[str, dict]) -> list[Hit]:
     hits = []
     for ch in channels:
-        for note in strikes(notes.get(ch, [])):
+        for note in channel_strikes(CHANNEL_NAMES[ch], notes.get(ch, [])):
             item = assignment.get(group_key(CHANNEL_NAMES[ch], note.pitch))
             if item and item.get("lane"):
                 hits.append(Hit(note.frame, item["lane"], bool(item.get("cymbal")) and item["lane"] not in ("kick", "snare")))

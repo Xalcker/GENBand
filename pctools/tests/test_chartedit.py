@@ -139,7 +139,7 @@ def test_payload_and_page(song_copy):
     payload = editor.build_payload(sd)
     assert payload["title"] == "TORMENTA DE NEON"
     assert [i["name"] for i in payload["instruments"]] == ["guitarra", "teclado", "bajo", "bateria"]
-    assert set(payload["channels"]) == {"fm1", "fm2", "fm3", "fm4", "fm5", "fm6", "psg1", "psg2", "psg3", "ruido"}
+    assert set(payload["channels"]) == {"fm1", "fm2", "fm3", "fm4", "fm5", "fm6", "psg1", "psg2", "psg3", "ruido", "dac"}
     assert payload["charts"] == payload["auto"]      # sin edits.json, el chart es el automático
     assert all(not p for p in payload["problems"].values())
     page = editor.render_page({**payload, "editable": True})
@@ -178,6 +178,7 @@ def test_save_and_export_through_the_server(song_copy):
         with urllib.request.urlopen(base + "/api/player") as res:
             player = json.loads(res.read())
         assert base64.b64decode(player["stream"]) == sd.stream and player["frames"] == sd.stream_frames
+        assert player["dac"] == []    # (tormenta no usa el DAC)
     finally:
         server.shutdown()
 

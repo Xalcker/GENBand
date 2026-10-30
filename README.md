@@ -189,7 +189,7 @@ Primero mira qué tiene cada canal:
 uv run genband channels "songs_src/Sonic/02 Green Hill Zone.vgz"
 ```
 
-Muestra cuántas notas y qué altura tiene cada canal (`fm1`…`fm6`, `psg1`…`psg3`, `ruido`) y sugiere cuál
+Muestra cuántas notas y qué altura tiene cada canal (`fm1`…`fm6`, `psg1`…`psg3`, `ruido`, `dac`) y sugiere cuál
 es la guitarra (la melodía), el teclado y el bajo. Después importa:
 
 ```bash
@@ -228,14 +228,21 @@ Qué hace, paso a paso:
 *portadores* del canal FM (los que suenan según su algoritmo) o la atenuación del PSG, y recuerda lo que
 pide la canción. Al acertar se restaura en el acto, así que la nota que estaba sonando se vuelve a oír.
 
-**Batería:** los golpes de sus canales se agrupan (en el ruido, por su tipo; en un canal FM, por su tono) y
-cada grupo tiene un papel (bombo, tarola, tom 1-3, y si es platillo) en `src/songs/<nombre>/drums.json`. Si
-no existe, `import-song` lo escribe con una sugerencia (el tono FM más grave es el bombo; en el ruido, el
-blanco más agudo es el hi-hat y el siguiente la tarola), que se corrige a mano y sobrevive a `reimport`. Con
-eso se generan los 4 charts de batería con el generador de NESBand (`drums.py`).
+**Batería:** los golpes de sus canales se agrupan (en el ruido, por su tipo; en el DAC, por su sample; en un
+canal FM, por su tono) y cada grupo tiene un papel (bombo, tarola, tom 1-3, y si es platillo) en
+`src/songs/<nombre>/drums.json`. Si no existe, `import-song` lo escribe con una sugerencia (en el DAC, por cómo
+suena cada sample: de los que más suenan, el más grave es el bombo y el más ruidoso la tarola, y los demás son
+toms; el tono FM más grave es el bombo; en el ruido, el blanco más agudo es el hi-hat y el siguiente la
+tarola), que se corrige a mano y sobrevive a `reimport`. Con eso se generan los 4 charts de batería con el
+generador de NESBand (`drums.py`).
 
-**Lo que aún no suena:** el **DAC** (los samples de batería de muchos juegos). Alimentarlo necesita un driver
-en el Z80, que es la siguiente etapa; mientras, esas canciones suenan sin su batería sampleada.
+**La batería sampleada (DAC):** muchos juegos (Sonic, Streets of Rage…) tocan su batería con samples en el DAC
+del YM2612. El VGM trae los samples en un banco y los manda byte por byte; el importador los separa en golpes
+(cada golpe empieza en un lugar del banco y suena a una frecuencia: el mismo sample a varias frecuencias, como
+los timbales de Sonic, son samples distintos), los pasa a la frecuencia más cercana del driver (8000 a 32000
+Hz) y en el flujo cada golpe queda como "toca el sample n". En el juego los toca el driver PCM de SGDK en el
+Z80. Los golpes del DAC son el canal `dac` (un solo canal: un golpe corta al anterior, como en el juego
+original). Los VGM que mandan el DAC con streams (comandos `$9x`) aún no se leen.
 
 ### Editor de charts
 
@@ -265,8 +272,8 @@ dependencias; el servidor solo escucha en `127.0.0.1`).
 - **Escuchar** (`Espacio`) toca la canción desde la línea de golpe, y la línea avanza con la música. La toca
   `genplayer.js`, un emulador del YM2612 y del PSG en JavaScript (sigue al `fm.c` de MAME) que reproduce el mismo
   flujo que va en la ROM; la primera vez tarda un par de segundos en prepararlo. Los botones **M**/**S** de cada
-  canal (o las teclas `1`-`9` y `0` para FM 1-6, PSG 1-3 y ruido; con `Mayús`, solo) lo silencian o dejan
-  solo. No emula el DAC, el SSG-EG ni el modo especial del canal 3 (las canciones de GENBand no los usan).
+  canal (o las teclas `1`-`9`, `0` y `-` para FM 1-6, PSG 1-3, ruido y DAC; con `Mayús`, solo) lo silencian o
+  dejan solo. Toca también los samples del DAC. No emula el SSG-EG ni el modo especial del canal 3.
 
 `--no-open` no abre el navegador, `--port` cambia el puerto y `--html ruta.html` escribe una página de solo
 lectura (sin Escuchar).
@@ -328,9 +335,11 @@ guarde con sus iniciales y siga ahí al volver a encender, que la batería se pu
 2 jugadores VS haya empate con el mismo chart y que gane el otro si uno pierde, que en Co-Op la banda haga
 todas las notas y siga si un jugador cae, que el audio suene y que no se pierdan cuadros. El bot toca con los dos controles. El bot llega a las opciones como un jugador (`GENBAND_OPTS`). Cada caso deja en
 `build/test-<nombre>/` las capturas, el audio (`audio.wav`) y el registro. `tests/run_tests.sh '*-nada'`
-corre solo los casos que coinciden; `--no-build` usa la ROM que ya está.
+corre solo los casos que coinciden; `--no-build` usa la ROM que ya está. Cada caso elige su canción por la
+carpeta (las importadas cambian el orden del menú), y si está importada Green Hill Zone de Sonic (`ghz`),
+también se prueba la batería con el DAC.
 
-`pytest` prueba el lector y escritor de VGM, la extracción de notas, el generador de charts y el editor (las
+`pytest` prueba el lector y escritor de VGM, la extracción de notas y de los golpes del DAC, el generador de charts y el editor (las
 ediciones y guardar y exportar a través de su servidor, sobre una copia de la canción). Si hay `node`, también
 toca una canción con `genplayer.js` (`tests/genplayer_run.js` escribe la mezcla en un WAV). Contra el audio de
 MAME, la vista previa de *Tormenta de neón* da una correlación de 0.95 en la envolvente (ventanas de 50 ms) y el
@@ -350,9 +359,13 @@ mismo volumen (MAME/JS 1.00); la música del título, 0.86.
   del VDP.
 - **Las notas** se leen del chart poco antes de entrar a la pantalla y viven en una cola de 64; de ahí se
   juzgan y se dibujan. El formato del chart es el de NESBand: pares (cuadros desde la anterior, carriles).
-- **La música:** `src/music.c` aplica una vez por cuadro las escrituras del flujo; el Z80 se queda detenido
-  con el bus pedido para que el 68000 pueda escribir en el YM2612.
-- **El tiempo de CPU:** la interrupción de cada línea se lleva ~40% del 68000, así que el bucle del juego
+- **La música:** `src/music.c` aplica una vez por cuadro las escrituras del flujo. El Z80 tiene el driver PCM
+  de SGDK, que toca los samples del DAC: el 68000 le pide el bus solo mientras escribe en el YM2612 (los dos
+  no pueden usar sus puertos a la vez) y, antes de devolverlo, vuelve a elegir el registro del DAC ($2A),
+  porque el driver solo escribe el dato. El DAC se apaga al empezar cada canción, para que el canal FM 6
+  suene en las que no lo usan.
+- **El tiempo de CPU:** la interrupción de cada línea se lleva buena parte del 68000 (vive en la RAM y se
+  modifica a sí misma para gastar lo menos posible: ~132 ciclos por línea), así que el bucle del juego
   tiene que caber en lo que queda: si no cabe, ese cuadro se pierde y la canción (y la música) se atrasa. Por
   eso los sprites se escriben directo en la tabla de SGDK, las cuentas por sprite son de 16 bits (las de 32
   van a libgcc, que es lenta en el 68000), el marcador va a la VRAM en una transferencia por parte y solo si
@@ -362,13 +375,11 @@ mismo volumen (MAME/JS 1.00); la música del título, 0.86.
 ## Hoja de ruta
 
 GENBand ya tiene lo que tiene NESBand (1 y 2 jugadores, batería, opciones y práctica, récords, escenario,
-release y editor de charts con Escuchar). Lo que falta, más o menos en orden:
+release, editor de charts con Escuchar y la batería sampleada del DAC). Lo que falta, más o menos en orden:
 
-1. Driver de sonido en el Z80 para el **DAC** (la batería sampleada de los VGM de otros juegos) y para que la
-   música no dependa del 68000.
-2. Generar los gráficos al compilar (en Python) en vez de al arrancar: hoy el arranque tarda ~2 s.
-3. Mejor arte del escenario (los haces de luz y el público son sencillos) y público también con 2 jugadores.
-4. Probar en hardware (flash cart y MiSTer).
+1. Generar los gráficos al compilar (en Python) en vez de al arrancar: hoy el arranque tarda ~2 s.
+2. Mejor arte del escenario (los haces de luz y el público son sencillos) y público también con 2 jugadores.
+3. Probar en hardware (sobre todo el DAC: el 68000 y el Z80 compartiendo el YM2612) (flash cart y MiSTer).
 
 ## Licencia
 

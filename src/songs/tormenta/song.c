@@ -2012,4 +2012,5 @@ const Song song_tormenta = {
         { 111, 213, 401, 449 },
         { 111, 200, 308, 308 }
     },
+    .dac = NULL,
 };

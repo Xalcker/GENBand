@@ -1,15 +1,17 @@
 "use strict";
-// Corre genplayer.js en Node: node genplayer_run.js flujo.bin cuadros salida.wav
+// Corre genplayer.js en Node: node genplayer_run.js flujo.bin cuadros [salida.wav] [dac.json]
+// (dac.json: los samples del DAC, [{"data": base64 de los bytes con signo, "rate": Hz}])
 // Escribe la mezcla como WAV (16 bits, 44100 Hz, mono) e imprime en JSON el RMS de la mezcla y de cada canal.
 const fs = require("fs");
 const path = require("path");
 const GenPlayer = require(path.join(__dirname, "..", "genband_tools", "genplayer.js"));
 
 async function main() {
-  const [streamPath, framesText, wavPath] = process.argv.slice(2);
+  const [streamPath, framesText, wavPath, dacPath] = process.argv.slice(2);
   const stream = new Uint8Array(fs.readFileSync(streamPath));
+  const dac = dacPath ? JSON.parse(fs.readFileSync(dacPath, "utf8")).map((d) => ({ data: new Uint8Array(Buffer.from(d.data, "base64")), rate: d.rate })) : [];
   const started = Date.now();
-  const result = await GenPlayer.render(stream, Number(framesText), { sampleRate: 44100 });
+  const result = await GenPlayer.render(stream, Number(framesText), { sampleRate: 44100, dac });
   const seconds = (Date.now() - started) / 1000;
   const rms = (arr, scale) => {
     if (!arr) return 0;

@@ -11,9 +11,11 @@ El juego corre a 60 cuadros por segundo y su reproductor aplica una vez por cuad
 tocan: un VGM pide esperas en muestras (735 por cuadro), así que cada escritura se redondea al cuadro
 más cercano. A esa resolución no se nota.
 
-Lo que no se usa: el DAC (los samples de batería de muchos juegos, registro $2A y los comandos $8n y
-$9x de streaming). El reproductor de la ROM corre en el 68000 una vez por cuadro y no puede alimentar
-un sample a miles de muestras por segundo; eso necesita un driver en el Z80 (pendiente).
+El DAC (los samples de batería de muchos juegos): el VGM trae los samples en un bloque de datos ($67) y
+los toca byte por byte ($8n), saltando al inicio de cada golpe ($E0). El reproductor de la ROM no puede
+alimentar el DAC a miles de muestras por segundo desde el 68000, así que cada golpe se vuelve un evento
+"toca el sample n" y lo toca el driver PCM de SGDK en el Z80 (ver `_dac_samples` y src/music.c). Los
+streams de DAC ($9x) aún no se leen.
 """
 
 from __future__ import annotations
@@ -32,16 +34,27 @@ SAMPLES_PER_FRAME = 735  # 44100 / 60
 # Canales: índices que usan el juego (máscara de silencio) y las herramientas
 FM_CHANNELS = 6
 PSG_TONES = 3
-CHANNEL_NAMES = ["fm1", "fm2", "fm3", "fm4", "fm5", "fm6", "psg1", "psg2", "psg3", "ruido"]
+CHANNEL_NAMES = ["fm1", "fm2", "fm3", "fm4", "fm5", "fm6", "psg1", "psg2", "psg3", "ruido", "dac"]
 NOISE = 9
+DAC = 10
+PERCUSSION = (NOISE, DAC)  # canales sin altura (cada golpe es un tipo de ruido o un sample)
+
+# Frecuencias del driver PCM de SGDK (en el orden de su parámetro de velocidad, SOUND_PCM_RATE_...)
+PCM_RATES = (32000, 22050, 16000, 13400, 11025, 8000)
 
 
 @dataclass(frozen=True)
 class Write:
     sample: int  # instante (muestras de 44.1 kHz desde el inicio)
-    chip: str  # "ym0", "ym1" (los dos puertos del YM2612) o "psg"
+    chip: str  # "ym0", "ym1" (los dos puertos del YM2612), "psg" o "dac" (un golpe: reg = el sample)
     reg: int  # registro del YM (en el PSG, 0)
-    value: int
+    value: int  # (en el DAC: cuántos cuadros dura el sample)
+
+
+@dataclass(frozen=True)
+class DacSample:
+    data: bytes  # con signo (8 bits, 0 = silencio), ya a la frecuencia del driver
+    rate: int  # índice en PCM_RATES
 
 
 @dataclass
@@ -51,6 +64,7 @@ class Vgm:
     loop_sample: int | None  # dónde empieza el bucle (None = no tiene)
     loop_samples: int
     tags: dict[str, str]
+    dac_samples: list[DacSample]
 
 
 # Comandos del formato VGM que no usamos, con cuántos bytes ocupan (incluido el comando)
@@ -110,6 +124,9 @@ def read_vgm(path: Path) -> Vgm:
     writes: list[Write] = []
     sample = 0
     loop_sample = None
+    bank = bytearray()  # los samples del DAC (bloques de datos de tipo 0)
+    runs: list[_DacRun] = []  # cada golpe del DAC: desde dónde del banco, cuántos bytes y en cuánto tiempo
+    dac_pos = 0
     pos = start
     while pos < len(data):
         if loop_pos is not None and pos == loop_pos:
@@ -135,16 +152,121 @@ def read_vgm(path: Path) -> Vgm:
         elif 0x70 <= cmd <= 0x7F:
             sample += (cmd & 0x0F) + 1
             pos += 1
-        elif 0x80 <= cmd <= 0x8F:  # una muestra del DAC (no se usa) y esperar n
+        elif 0x80 <= cmd <= 0x8F:  # un byte del banco al DAC y esperar n
+            if not runs:
+                runs.append(_DacRun(sample, dac_pos))
+            runs[-1].played(sample)
+            dac_pos += 1
             sample += cmd & 0x0F
             pos += 1
+        elif cmd == 0xE0:  # saltar a un lugar del banco: empieza un golpe
+            dac_pos = struct.unpack_from("<I", data, pos + 1)[0]
+            runs.append(_DacRun(sample, dac_pos))
+            pos += 5
         elif cmd == 0x67:  # bloque de datos (samples del DAC)
             size = struct.unpack_from("<I", data, pos + 3)[0] & 0x7FFFFFFF
+            if data[pos + 2] == 0x00:
+                bank += data[pos + 7 : pos + 7 + size]
             pos += 7 + size
         else:
             pos += _command_length(cmd, data, pos)
     tags = _gd3(data, 0x14 + gd3_offset if gd3_offset else 0)
-    return Vgm(writes, total or sample, loop_sample, loop_samples, tags)
+    samples, hits = _dac_samples(bytes(bank), runs)
+    if hits:  # los golpes van entre las escrituras, en su instante (después de las de ese mismo instante)
+        writes = sorted(writes + hits, key=lambda w: w.sample)
+    return Vgm(writes, total or sample, loop_sample, loop_samples, tags, samples)
+
+
+# --- DAC: de los bytes que el VGM manda uno por uno, a samples que toca el driver ---------------------
+
+
+class _DacRun:
+    """Un golpe del DAC: desde dónde del banco, y en qué instantes salieron sus bytes."""
+
+    def __init__(self, sample: int, offset: int) -> None:
+        self.sample, self.offset = sample, offset
+        self.count, self.first, self.last = 0, sample, sample
+
+    def played(self, sample: int) -> None:
+        if not self.count:
+            self.first = sample
+        self.count += 1
+        self.last = sample
+
+    @property
+    def rate(self) -> float | None:
+        """Bytes por segundo (con los bytes que salieron; un golpe muy corto no lo dice bien)."""
+        if self.count < _DAC_RELIABLE:
+            return None
+        return SAMPLE_RATE * (self.count - 1) / max(1, self.last - self.first)
+
+
+_DAC_MIN_BYTES = 8  # golpes más cortos no se oyen (son restos al cortar uno con otro)
+_DAC_RELIABLE = 48  # bytes para confiar en la frecuencia medida de un golpe
+_DAC_SAME_RATE = 1.06  # frecuencias dentro de este factor son la misma (el driver del juego no es exacto)
+
+
+def _dac_samples(bank: bytes, runs: list[_DacRun]) -> tuple[list[DacSample], list[Write]]:
+    """Los samples del DAC y los golpes (escrituras "dac").
+
+    Cada golpe empieza en un lugar del banco y suena a una frecuencia (los juegos tocan el mismo sample a
+    varias, como los timbales de Sonic). Un sample es un par (lugar, frecuencia): sus bytes son los más que
+    se oyeron en uno de sus golpes (los demás los cortó el golpe siguiente, y el driver los corta igual).
+    Se pasa a la frecuencia del driver más cercana y a 8 bits con signo."""
+    runs = [r for r in runs if r.count >= _DAC_MIN_BYTES and r.offset < len(bank)]
+    if not runs:
+        return [], []
+    measured = [r.rate for r in runs if r.rate]
+    fallback = sorted(measured)[len(measured) // 2] if measured else 8000.0
+    # Las frecuencias de cada lugar, en grupos
+    groups: dict[int, list[float]] = {}
+    for offset in sorted({r.offset for r in runs}):
+        rates = sorted(r.rate for r in runs if r.offset == offset and r.rate)
+        clusters: list[list[float]] = []
+        for rate in rates:
+            if clusters and rate <= clusters[-1][0] * _DAC_SAME_RATE:
+                clusters[-1].append(rate)
+            else:
+                clusters.append([rate])
+        groups[offset] = [c[len(c) // 2] for c in clusters] or [fallback]
+
+    ids: dict[tuple[int, float], int] = {}
+    lengths: dict[tuple[int, float], int] = {}
+    keyed = []
+    for r in runs:
+        options = groups[r.offset]
+        rate = min(options, key=lambda g: abs(math.log(g / r.rate))) if r.rate else options[0]
+        key = (r.offset, rate)
+        ids.setdefault(key, len(ids))
+        lengths[key] = max(lengths.get(key, 0), r.count)
+        keyed.append((r, key))
+
+    samples = []
+    for (offset, rate), _ in sorted(ids.items(), key=lambda item: item[1]):
+        raw = bank[offset : offset + lengths[(offset, rate)]]
+        index = min(range(len(PCM_RATES)), key=lambda i: abs(math.log(PCM_RATES[i] / rate)))
+        samples.append(DacSample(_resample(raw, rate, PCM_RATES[index]), index))
+    if len(samples) > 255:
+        raise ValueError(f"el DAC usa {len(samples)} samples distintos (el flujo admite 255)")
+    hits = []
+    for r, key in keyed:
+        seconds = lengths[key] / key[1]
+        hits.append(Write(r.sample, "dac", ids[key], max(1, round(seconds * 60))))
+    return samples, hits
+
+
+def _resample(raw: bytes, source: float, target: int) -> bytes:
+    """De bytes sin signo (128 = silencio) a `source` Hz, a bytes con signo a `target` Hz (interpolación lineal)."""
+    n = max(1, round(len(raw) * target / source))
+    step = source / target
+    out = bytearray(n)
+    for i in range(n):
+        x = i * step
+        j = int(x)
+        a = raw[min(j, len(raw) - 1)]
+        b = raw[min(j + 1, len(raw) - 1)]
+        out[i] = (round(a + (b - a) * (x - j)) - 128) & 0xFF
+    return bytes(out)
 
 
 def frame_of(sample: int) -> int:
@@ -175,11 +297,12 @@ def unrolled_writes(vgm: Vgm, frames: int | None = None) -> list[tuple[int, Writ
 #   $62          fin del cuadro: lo que sigue va en el siguiente
 #   $7n          fin del cuadro y n cuadros más sin escrituras (n = 1..15)
 #   $61 lo hi    fin del cuadro y N cuadros más sin escrituras (N de 16 bits)
+#   $54 n        tocar el sample n del DAC (src/music.c lo pasa al driver PCM del Z80)
 #   $66          fin de la música (o vuelta al bucle, si la canción tiene uno)
 #
 # Los códigos son los mismos que los del VGM, para que sea fácil leerlo, pero las esperas cuentan cuadros.
 
-CMD_PSG, CMD_YM0, CMD_YM1, CMD_FRAME, CMD_WAIT, CMD_END = 0x50, 0x52, 0x53, 0x62, 0x61, 0x66
+CMD_PSG, CMD_YM0, CMD_YM1, CMD_DAC, CMD_FRAME, CMD_WAIT, CMD_END = 0x50, 0x52, 0x53, 0x54, 0x62, 0x61, 0x66
 
 # Registros del YM que el flujo no lleva: los timers (el juego no los usa) y el DAC ($2A, ver arriba)
 _SKIP = {0x24, 0x25, 0x26, 0x2A}
@@ -210,7 +333,7 @@ def frame_stream(
     $66 sin callar nada y `bucle` es el byte donde empieza ese cuadro (adonde vuelve el reproductor)."""
     by_frame: dict[int, list[Write]] = {}
     for frame, w in writes:
-        if w.chip != "psg" and w.reg in _SKIP:
+        if w.chip in ("ym0", "ym1") and w.reg in _SKIP:
             continue
         by_frame.setdefault(frame, []).append(w)
     last = max(by_frame) if by_frame else 0
@@ -232,6 +355,9 @@ def frame_stream(
         for w in by_frame[frame]:
             if w.chip == "psg":
                 cmds += bytes((CMD_PSG, w.value))
+                continue
+            if w.chip == "dac":
+                cmds += bytes((CMD_DAC, w.reg))
                 continue
             key = (w.chip, w.reg)
             if not _keep_always(w.reg) and shadow.get(key) == w.value:
@@ -326,7 +452,10 @@ class _Tracker:
 
 
 def extract_notes(writes: list[tuple[int, Write]], end_frame: int | None = None) -> dict[int, list[Note]]:
-    """Las notas de cada canal (0-5 FM, 6-8 tonos del PSG, 9 ruido), a partir de las escrituras."""
+    """Las notas de cada canal (0-5 FM, 6-8 tonos del PSG, 9 ruido, 10 DAC), a partir de las escrituras.
+
+    En el DAC cada golpe es una nota cuya "altura" es el número de sample, y dura lo que el sample o
+    hasta el golpe siguiente."""
     trackers = [_Tracker() for _ in CHANNEL_NAMES]
     latch = [0, 0]  # parte alta de la frecuencia ($A4-$A6) que espera a la parte baja, por puerto
     freq = [(0, 0)] * FM_CHANNELS  # (bloque, F-number) de cada canal FM
@@ -336,6 +465,7 @@ def extract_notes(writes: list[tuple[int, Write]], end_frame: int | None = None)
     psg_volume = [15] * 4  # atenuación: 15 = apagado
     noise_mode = 0
     psg_latch = (0, 0)  # (canal, tipo): el último registro del PSG que se eligió
+    dac_end = 0  # cuadro en que termina el sample del DAC que suena
     last_frame = 0
 
     def fm_current(ch: int) -> float | None:
@@ -343,6 +473,12 @@ def extract_notes(writes: list[tuple[int, Write]], end_frame: int | None = None)
 
     for frame, w in writes:
         last_frame = frame
+        if w.chip == "dac":
+            t = trackers[DAC]
+            t.off(min(frame, dac_end))
+            t.on(frame, float(w.reg), f"dac{w.reg}")
+            dac_end = frame + w.value
+            continue
         if w.chip == "psg":
             v = w.value
             if v & 0x80:
@@ -401,6 +537,7 @@ def extract_notes(writes: list[tuple[int, Write]], end_frame: int | None = None)
                 trackers[ch].bend(frame, fm_current(ch))
 
     stop = end_frame if end_frame is not None else last_frame + 1
+    trackers[DAC].off(min(stop, dac_end))
     for t in trackers:
         t.off(stop)
     return {i: t.notes for i, t in enumerate(trackers) if t.notes}

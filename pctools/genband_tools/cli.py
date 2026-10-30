@@ -80,10 +80,10 @@ def parse_channels(text: str | None) -> list[int] | None:
 
 
 def summarize(notes: dict[int, list[vgm.Note]]) -> dict[int, tuple[int, float, int]]:
-    """(notas tras juntar los adornos, altura mediana, alturas distintas) de cada canal, sin el ruido."""
+    """(notas tras juntar los adornos, altura mediana, alturas distintas) de cada canal, sin el ruido ni el DAC."""
     out = {}
     for ch, ns in notes.items():
-        if ch == vgm.NOISE:
+        if ch in vgm.PERCUSSION:
             continue
         merged = merge_attacks(ns)
         out[ch] = (len(merged), statistics.median(n.pitch for n in merged), len({n.pitch for n in merged}))
@@ -113,9 +113,9 @@ def auto_assign(notes: dict[int, list[vgm.Note]]) -> dict[str, list[int]]:
 
 
 def drum_channels(notes: dict[int, list[vgm.Note]], melodic: set[int]) -> list[int]:
-    """Los canales de batería si no se dijeron: el ruido, y los que casi no cambian de tono (como el bombo FM
-    de las canciones de GENBand) y no son de otro instrumento."""
-    out = [vgm.NOISE] if notes.get(vgm.NOISE) else []
+    """Los canales de batería si no se dijeron: el ruido, el DAC, y los que casi no cambian de tono (como el
+    bombo FM de las canciones de GENBand) y no son de otro instrumento."""
+    out = [ch for ch in vgm.PERCUSSION if notes.get(ch)]
     for ch, (count, _, distinct) in summarize(notes).items():
         if ch not in melodic and count >= 20 and distinct < 5:
             out.append(ch)
@@ -133,6 +133,21 @@ def c_bytes(name: str, data: bytes) -> str:
         lines.append("    " + ",".join(f"0x{b:02X}" for b in data[i : i + 24]) + ",")
     lines.append("};")
     return "\n".join(lines) + "\n"
+
+
+def dac_to_c(samples: list[vgm.DacSample]) -> list[str]:
+    """Los samples del DAC y su tabla. El driver PCM de SGDK los pide alineados a 256 bytes y de un largo
+    múltiplo de 256 (se completan con silencio)."""
+    if not samples:
+        return []
+    out = []
+    for i, sample in enumerate(samples):
+        data = sample.data + bytes(-len(sample.data) % 256)
+        body = c_bytes(f"dac{i}", data).replace(f"static const u8 dac{i}[] =", f"static const u8 dac{i}[] __attribute__((aligned(256))) =")
+        out.append(body)
+    rows = ",\n".join(f"    {{ dac{i}, {len(s.data) + (-len(s.data) % 256)}, {s.rate} }}" for i, s in enumerate(samples))
+    out.append(f"static const DacSample dac_samples[] = {{\n{rows}\n}};\n")
+    return out
 
 
 def c_string(text: str) -> str:
@@ -153,6 +168,7 @@ class SongData:
     assign: dict[str, list[int]]       # instrumento -> canales
     drums: list[int]                   # canales de la batería
     grid: BeatGrid
+    dac_samples: list[vgm.DacSample]   # los samples del DAC (el flujo los toca por número)
 
     @property
     def folder(self) -> Path:
@@ -191,9 +207,9 @@ def load_song(opts: dict) -> SongData:
             assign[inst] = chosen
     used = {ch for chs in assign.values() for ch in chs}
     drums = parse_channels(opts.get(DRUMS)) or drum_channels(notes, used)
-    onsets = [n.frame for ch, ns in notes.items() if ch in used or ch == vgm.NOISE for n in ns]
+    onsets = [n.frame for ch, ns in notes.items() if ch in used or ch in vgm.PERCUSSION for n in ns]
     grid = estimate_beat(onsets, opts.get("beat_frames"))
-    return SongData(opts, name, title, game, stream, stream_frames, notes, assign, drums, grid)
+    return SongData(opts, name, title, game, stream, stream_frames, notes, assign, drums, grid, data.dac_samples)
 
 
 def drum_assignment(sd: SongData, override: dict | None = None) -> tuple[dict | None, bool]:
@@ -206,7 +222,7 @@ def drum_assignment(sd: SongData, override: dict | None = None) -> tuple[dict | 
     saved = load_drums(sd.folder)
     if saved is not None:
         return saved, False
-    return suggest_assignment(drum_groups(sd.notes, sd.drums)), True
+    return suggest_assignment(drum_groups(sd.notes, sd.drums), sd.dac_samples), True
 
 
 def auto_charts(sd: SongData, assignment: dict | None = None) -> dict[str, list[ChartNote]]:
@@ -250,6 +266,7 @@ def write_song(sd: SongData, charts: dict[str, list[ChartNote]]) -> list[str]:
         "",
         c_bytes("stream", sd.stream),
     ]
+    out += dac_to_c(sd.dac_samples)
     charts_c, buttons_c, mask_c, report = [], [], [], []
     for inst in [i for i, _ in INSTRUMENTS] + [DRUMS]:
         keys = [f"{inst}/{d.name}" for d in DIFFICULTIES]
@@ -287,6 +304,7 @@ def write_song(sd: SongData, charts: dict[str, list[ChartNote]]) -> list[str]:
     .notes = {{
         {(","+chr(10)+"        ").join(buttons_c)}
     }},
+    .dac = {"dac_samples" if sd.dac_samples else "NULL"},
 }};
 """
     )

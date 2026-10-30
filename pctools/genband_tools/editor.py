@@ -1,7 +1,7 @@
 """Editor visual de charts: una página HTML local (Canvas, sin dependencias) servida por `genband edit-chart`.
 
 Es el editor de NESBand con los canales de la Genesis. La página muestra las notas de cada canal de la
-canción (FM 1-6, los tonos del PSG y el ruido) y el chart de un instrumento y dificultad. Los datos salen
+canción (FM 1-6, los tonos del PSG, el ruido y el DAC) y el chart de un instrumento y dificultad. Los datos salen
 de la misma tubería que `import-song` (cli.py: load_song, auto_charts); encima se aplican las ediciones de
 edits.json (chartedit.py). Guardar escribe edits.json (y drums.json); Exportar además vuelve a importar la
 canción, que es lo que regenera su song.c con las ediciones.
@@ -152,8 +152,13 @@ def render_page(payload: dict, template: Path = HTML_PATH) -> str:
 
 
 def player_payload(sd: cli.SongData) -> dict:
-    """El flujo de la música (el mismo que va en song.c) para que la página lo toque con genplayer.js."""
-    return {"stream": base64.b64encode(sd.stream).decode("ascii"), "frames": sd.stream_frames}
+    """El flujo de la música (el mismo que va en song.c) y los samples del DAC, para que la página lo toque
+    con genplayer.js."""
+    return {
+        "stream": base64.b64encode(sd.stream).decode("ascii"),
+        "frames": sd.stream_frames,
+        "dac": [{"data": base64.b64encode(s.data).decode("ascii"), "rate": vgm.PCM_RATES[s.rate]} for s in sd.dac_samples],
+    }
 
 
 # --- Menú Archivo: canciones disponibles, fuentes para importar y la canción abierta -----------

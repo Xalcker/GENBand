@@ -6,12 +6,17 @@
 // escrituras a los registros de cada cuadro de la consola. Se emula a la frecuencia propia del YM2612 (reloj / 144,
 // unos 53267 Hz) y se baja a la frecuencia de salida promediando.
 //
-// Cada canal (FM 1-6, PSG 1-3 y ruido) se renderiza por separado: la mezcla completa es su suma, así
+// Cada canal (FM 1-6, PSG 1-3, ruido y DAC) se renderiza por separado: la mezcla completa es su suma, así
 // que silenciar canales en el editor es sumar solo los que se oyen (como en el nesplayer.js de NESBand).
 //
 // No es una emulación exacta ciclo por ciclo: la estructura es la del chip (como la documenta MAME, fm.c)
-// pero sin SSG-EG, sin el modo especial del canal 3 y sin el DAC (el juego tampoco lo toca). Las
-// escrituras de cada cuadro se aplican al empezar el cuadro, como en el juego.
+// pero sin SSG-EG ni el modo especial del canal 3. Las escrituras de cada cuadro se aplican al empezar
+// el cuadro, como en el juego.
+//
+// El DAC: el flujo dice "toca el sample n" ($54 n) y el juego se lo pasa al driver PCM del Z80, que lo
+// toca a su frecuencia hasta el final o hasta el siguiente golpe. Aquí igual: opts.dac trae los samples
+// (8 bits con signo y su frecuencia en Hz); mientras el DAC está encendido ($2B) sustituye al canal FM 6,
+// con la misma escala que un canal FM a todo volumen (como en el chip).
 
 const GenPlayer = (() => {
   const YM_CLOCK = 7670453;
@@ -20,7 +25,7 @@ const GenPlayer = (() => {
   // El flujo avanza un cuadro por cada cuadro de la consola: la Genesis NTSC da 59.92 por segundo
   // (reloj maestro de 53.693175 MHz / 3420 por línea / 262 líneas), no 60
   const FPS = 53693175 / 3420 / 262;
-  const CHANNELS = 10;                     // FM 1-6, PSG 1-3, ruido
+  const CHANNELS = 11;                     // FM 1-6, PSG 1-3, ruido, DAC
 
   // --- Tablas del YM2612 ---
   const SIN = new Float32Array(1024);
@@ -252,6 +257,7 @@ const GenPlayer = (() => {
       const cmd = s[pos++];
       if (cmd === 0x52 || cmd === 0x53) { writeYM(chip, cmd - 0x52, s[pos], s[pos + 1]); pos += 2; }
       else if (cmd === 0x50) writePSG(chip, s[pos++]);
+      else if (cmd === 0x54) state.dacStart = s[pos++];
       else if (cmd === 0x62) return pos;
       else if ((cmd & 0xf0) === 0x70) { state.wait = cmd & 15; return pos; }
       else if (cmd === 0x61) { state.wait = s[pos] | (s[pos + 1] << 8); return pos + 2; }
@@ -260,29 +266,42 @@ const GenPlayer = (() => {
     return -1;
   }
 
-  // Toca `frames` cuadros del flujo. opts: sampleRate (44100), onProgress(f), yieldFn() (para no colgar la
-  // página). Devuelve { audio: Float32Array (la mezcla), stems: [Int16Array o null por canal], sampleRate }.
+  // Toca `frames` cuadros del flujo. opts: sampleRate (44100), dac ([{data: bytes con signo, rate: Hz}], los
+  // samples de la canción), onProgress(f), yieldFn() (para no colgar la página). Devuelve { audio: Float32Array (la mezcla), stems: [Int16Array o null por canal], sampleRate }.
   async function render(stream, frames, opts = {}) {
     const rate = opts.sampleRate || 44100;
     const total = Math.ceil((frames / FPS) * rate);
     const audio = new Float32Array(total);
     const stems = new Array(CHANNELS).fill(null);
     const chip = makeChip();
-    const st = { wait: 0 };
+    const st = { wait: 0, dacStart: -1 };
+    const samples = opts.dac || [];
+    let dacData = null, dacPos = 0, dacStep = 0;
     const ch = new Float32Array(CHANNELS);
     const acc = new Float64Array(CHANNELS);
-    const gains = [0, 1, 2, 3, 4, 5].map(() => FM_GAIN).concat([PSG_GAIN, PSG_GAIN, PSG_GAIN, PSG_GAIN]);
+    const gains = [0, 1, 2, 3, 4, 5].map(() => FM_GAIN).concat([PSG_GAIN, PSG_GAIN, PSG_GAIN, PSG_GAIN, FM_GAIN]);
     let pos = 0, native = 0, outIndex = 0, accCount = 0;
     const perOut = NATIVE / rate;
     let nextOut = perOut;
     for (let f = 0; f < frames && outIndex < total; f++) {
       if (pos >= 0) pos = frameWrites(chip, stream, pos, st);
+      if (st.dacStart >= 0) {
+        const smp = samples[st.dacStart];
+        if (smp) { dacData = smp.data; dacPos = 0; dacStep = smp.rate / NATIVE; }
+        st.dacStart = -1;
+      }
       const end = ((f + 1) * NATIVE) / FPS;
       for (; native < end; native++) {
         if (++chip.egSub === 3) { chip.egSub = 0; stepEnvelope(chip); }
         const lfoTri = chip.lfoOn ? 1 - Math.abs(((chip.lfoPhase = (chip.lfoPhase + chip.lfoHz / NATIVE) % 1) * 2) - 1) : 0;
         for (let i = 0; i < 6; i++) ch[i] = i === 5 && chip.dac ? 0 : channelSample(chip, chip.ch[i], lfoTri);
         psgSample(chip, ch);
+        ch[10] = 0;
+        if (dacData) {
+          const b = dacData[dacPos | 0];
+          if (chip.dac) ch[10] = (b > 127 ? b - 256 : b) * 64;
+          if ((dacPos += dacStep) >= dacData.length) dacData = null;
+        }
         for (let i = 0; i < CHANNELS; i++) acc[i] += ch[i];
         accCount++;
         if (native + 1 >= nextOut) {

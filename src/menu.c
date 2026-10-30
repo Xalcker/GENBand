@@ -178,7 +178,7 @@ static void draw_all(void)
 
 static void preview(void)
 {
-    music_play(song()->stream, MUSIC_NO_LOOP);
+    music_play(song()->stream, song()->dac, MUSIC_NO_LOOP);
 }
 
 static void change(s16 delta)

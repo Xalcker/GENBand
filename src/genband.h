@@ -127,12 +127,12 @@ void queue_tile(VDPPlane plane, u16 attr, u16 x, u16 y);
 #define MUSIC_NO_LOOP   0xFFFF
 
 void music_init(void);
-void music_play(const u8 *stream, u16 loop);    // loop: byte del flujo adonde vuelve al terminar
+void music_play(const u8 *stream, const DacSample *dac, u16 loop);   // dac: Song.dac (o NULL); loop: byte del flujo adonde vuelve al terminar
 void music_stop(void);
 void music_update(void);                        // una vez por cuadro
-void music_seek(const u8 *stream, u16 frames);  // la canción desde el principio, adelantada `frames` cuadros
+void music_seek(const u8 *stream, const DacSample *dac, u16 frames);  // la canción desde el principio, adelantada `frames` cuadros
 void music_pause(bool pause);
-void music_mute(u16 channels, bool mute);       // bits 0-5 FM, 6-8 PSG, 9 ruido
+void music_mute(u16 channels, bool mute);       // bits 0-5 FM, 6-8 PSG, 9 ruido, 10 DAC
 bool music_playing(void);
 void music_advance(void);                       // solo la música (music_update = efectos + música)
 void sfx_play(u16 id);                          // SFX_... (sfx.h); suena aunque no haya música

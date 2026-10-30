@@ -32,7 +32,7 @@ Screen title_run(void)
     draw_logo();
     draw_text_center(BG_A, "UN JUEGO DE RITMO PARA LA GENESIS", 14, PAL1);
     draw_text_center(BG_A, "GENBAND V" GENBAND_VERSION " - GPL-2.0", 25, PAL1);
-    music_play(titulo_music, titulo_loop);
+    music_play(titulo_music, NULL, titulo_loop);
 
     for (u16 frame = 0;; frame++)
     {
