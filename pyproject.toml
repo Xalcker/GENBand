@@ -1,0 +1,24 @@
+[project]
+name = "genband-tools"
+version = "0.1.0"
+description = "Herramientas de PC para GENBand: componer e importar canciones (VGM) y generar charts"
+requires-python = ">=3.11"
+license = "GPL-2.0-or-later"
+license-files = ["LICENSE"]
+dependencies = []
+
+[project.scripts]
+genband = "genband_tools.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["pctools/genband_tools"]
+
+[tool.pytest.ini_options]
+testpaths = ["pctools/tests"]

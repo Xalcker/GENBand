@@ -1,0 +1,7 @@
+{
+  "name": "tormenta",
+  "source": "audio/tormenta.vgm",
+  "guitarra": "fm1",
+  "teclado": "fm2",
+  "bajo": "fm3"
+}

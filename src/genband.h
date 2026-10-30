@@ -1,0 +1,104 @@
+#ifndef GENBAND_H
+#define GENBAND_H
+
+#include <genesis.h>
+#include "song.h"
+
+#define SONG_LEAD_IN    128     // cuadros de autopista antes de que arranque la música
+#define NUM_LANES       5
+
+// Formato de los charts (el mismo que en NESBand): pares (cuadros desde la entrada anterior, carriles)
+#define CHART_END       0xFF    // carriles = $FF: fin del chart
+#define CHART_RELEASE   0x80    // entrada de fin de cola: sus bits 0-4 son los carriles que se sueltan
+#define CHART_SUSTAIN   0x40    // en una nota: tiene cola
+#define CHART_STAR      0x20    // en una nota: forma parte de una frase de poder estelar
+#define CHART_LANES     0x1F
+
+// --- Pantallas -----------------------------------------------------------------------------------
+
+typedef enum { SCREEN_BOOT, SCREEN_TITLE, SCREEN_MENU, SCREEN_PLAY, SCREEN_RESULTS } Screen;
+
+Screen title_run(void);
+Screen menu_run(void);
+Screen play_run(void);
+Screen results_run(void);
+
+extern Screen current_screen;
+
+// Lo que se eligió en el menú
+typedef struct {
+    u16 song;
+    u16 instrument;
+    u16 difficulty;
+    bool no_fail;
+} Selection;
+
+extern Selection sel;
+
+// Lo que deja la partida para la pantalla de resultados
+typedef struct {
+    u32 score;
+    u32 perfect;                // puntaje de acertar todo (sin poder estelar ni colas): de aquí salen las estrellas
+    u16 notes_hit;
+    u16 notes_total;
+    u16 max_combo;
+    u16 percent;
+    u16 stars;
+    bool failed;
+} Result;
+
+extern Result result;
+
+extern const char *const instrument_names[NUM_INSTRUMENTS];
+extern const char *const difficulty_names[NUM_DIFFICULTIES];
+
+// --- Control (main.c) ----------------------------------------------------------------------------
+
+extern u16 joy_held;            // botones presionados (de cualquiera de los dos controles)
+extern u16 joy_pressed;         // los que se presionaron en este cuadro
+void input_update(void);
+void wait_frame(void);          // espera la vblank y avanza la música si está sonando
+
+// --- Pantalla (main.c) ---------------------------------------------------------------------------
+
+void screen_reset(void);        // apaga y limpia todo: planos, scroll, sprites, ventana
+void draw_text(VDPPlane plane, const char *text, u16 x, u16 y, u16 pal);
+void draw_text_center(VDPPlane plane, const char *text, u16 y, u16 pal);
+void draw_number(VDPPlane plane, u32 value, u16 digits, u16 x, u16 y, u16 pal);
+
+// --- Música (music.c) ----------------------------------------------------------------------------
+
+#define MUSIC_NO_LOOP   0xFFFF
+
+void music_init(void);
+void music_play(const u8 *stream, u16 loop);    // loop: byte del flujo adonde vuelve al terminar
+void music_stop(void);
+void music_update(void);                        // una vez por cuadro
+void music_pause(bool pause);
+void music_mute(u16 channels, bool mute);       // bits 0-5 FM, 6-8 PSG, 9 ruido
+bool music_playing(void);
+
+extern const u8 *const titulo_music;
+extern const u16 titulo_loop;
+
+// --- Gráficos (gfx.c) ----------------------------------------------------------------------------
+
+void gfx_init(void);
+
+extern u16 tile_solid;          // + color (0-15): un tile de un solo color
+extern u16 tile_hwy;            // autopista: relleno, relleno con la línea del carril, borde derecho
+extern u16 tile_scroll;         // capa que se desplaza: ver gfx.c (líneas de tiempo y colas)
+extern u16 tile_gem;            // sprites de 4x2 tiles (8 tiles cada uno), uno por carril
+extern u16 tile_star_gem;
+extern u16 tile_ring;
+extern u16 tile_ring_on;
+extern u16 tile_flame;          // 4 dibujos de 8 tiles
+extern u16 tile_meter;          // medidor de vida: 3 colores x 9 niveles
+extern u16 tile_starbar;        // barra de poder estelar: 2 colores x 9 niveles
+extern u16 tile_logo;           // + 0..6: los tiles del logo (un color por fila)
+
+// Tiles de la capa que se desplaza (ver gfx.c)
+#define SCROLL_LINE_NONE 0
+u16 scroll_tile(u16 lane, u16 col, u16 tail, u16 line, u16 row);
+
+#endif
