@@ -42,7 +42,13 @@ Screen results_run(void)
         draw_text(BG_A, "ESTRELLAS", 9, 20, PAL0);
         draw_text(BG_A, stars, 21, 20, PAL2);
     }
-    draw_text_center(BG_A, "START: MENU", 25, PAL1);
+    if (result.new_record)
+    {
+        draw_text_center(BG_A, "NUEVO RECORD", 22, PAL2);
+        draw_text_center(BG_A, "START: ESCRIBE TUS INICIALES", 25, PAL1);
+    }
+    else
+        draw_text_center(BG_A, "START: MENU", 25, PAL1);
 
     for (;;)
     {
@@ -50,7 +56,7 @@ Screen results_run(void)
         if (joy_pressed & (BUTTON_START | BUTTON_A | BUTTON_C))
         {
             sfx_play(SFX_ACEPTAR);
-            return SCREEN_MENU;
+            return result.new_record ? SCREEN_INITIALS : SCREEN_MENU;
         }
         music_update();         // (solo los efectos: aquí no hay música)
         wait_frame();

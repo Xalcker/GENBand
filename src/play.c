@@ -801,6 +801,9 @@ static void finish(void)
     result.stars = 0;
     while (result.stars < 5 && pct >= thresholds[result.stars]) result.stars++;
     if (failed) result.stars = 0;
+    // Récord: perder, jugar sin fallo o con opciones (salvo EFECTO AL FALLAR) no graban
+    result.new_record = !failed && !sel.no_fail && !options_changed()
+                        && record_beats(sel.song, sel.instrument, sel.difficulty, score);
 }
 
 // Un paso del juego: la música, el chart y el juicio de los botones. Devuelve TRUE si la partida terminó.

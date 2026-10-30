@@ -123,6 +123,17 @@ Son las de NESBand:
 - **Estrellas:** salen del puntaje (sin el poder estelar ni las colas) contra el puntaje perfecto: 20, 40,
   60, 80 y 95%.
 
+**Récords:** el cartucho guarda el mejor puntaje de cada **canción, instrumento y dificultad**. En el menú,
+debajo de FALLO, ves el récord de lo que elegiste (`0029920 ABC *****`: puntaje, iniciales y estrellas, o
+`---`). Si lo superas, los resultados dicen **NUEVO RECORD** y con Start escribes tus iniciales como en un
+arcade (↑/↓ cambia la letra, ←/→ cambia de letra, Start la guarda). Perder, jugar **sin fallo** o con
+opciones (salvo EFECTO AL FALLAR) no graba récord.
+
+Viven en la **SRAM** del cartucho (la RAM con batería): MAME la guarda en su carpeta `nvram`, BlastEm junto
+a sus partidas y un flash cart en la tarjeta SD. Cada canción se identifica por un hash de su título y su
+juego, no por su lugar en el menú, así que los récords no se mezclan si agregas o quitas canciones. Si el
+archivo falta o está dañado (firma y suma de comprobación), el juego arranca con la tabla vacía.
+
 ## Importar canciones
 
 La música de Genesis se guarda en **VGM** (`.vgm`, o `.vgz` si está comprimido): son las escrituras a los
@@ -229,8 +240,8 @@ uv run pytest
 (`tests/autoplay.lua`) que pasa el título, elige en el menú con el control como un jugador, toca leyendo
 las notas de la RAM y anota los resultados. Comprueba que el juego perfecto acierte todo con 5 estrellas,
 que sin tocar se pierda, que SIN FALLO llegue al final, que los golpes al aire rompan el combo, que el espejo y
-las velocidades se puedan jugar perfecto, que la práctica se repita y que sus marcas cambien el bucle, y que el
-audio suene. El bot llega a las opciones como un jugador (`GENBAND_OPTS`). Cada caso deja en
+las velocidades se puedan jugar perfecto, que la práctica se repita y que sus marcas cambien el bucle, que un récord se
+guarde con sus iniciales y siga ahí al volver a encender, y que el audio suene. El bot llega a las opciones como un jugador (`GENBAND_OPTS`). Cada caso deja en
 `build/test-<nombre>/` las capturas, el audio (`audio.wav`) y el registro. `tests/run_tests.sh '*-nada'`
 corre solo los casos que coinciden; `--no-build` usa la ROM que ya está.
 

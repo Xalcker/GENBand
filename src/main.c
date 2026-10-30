@@ -97,6 +97,7 @@ int main(bool hard_reset)
     VDP_setTextPriority(1);
     gfx_init();
     music_init();
+    records_init();
     input_update();
 
     sel.song = 0;
@@ -114,6 +115,7 @@ int main(bool hard_reset)
             case SCREEN_PLAY:    current_screen = play_run(); break;
             case SCREEN_RESULTS: current_screen = results_run(); break;
             case SCREEN_OPTIONS: current_screen = options_run(); break;
+            case SCREEN_INITIALS: current_screen = initials_run(); break;
             default:             current_screen = SCREEN_TITLE; break;
         }
     }

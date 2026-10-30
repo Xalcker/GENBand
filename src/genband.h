@@ -17,13 +17,14 @@
 
 // --- Pantallas -----------------------------------------------------------------------------------
 
-typedef enum { SCREEN_BOOT, SCREEN_TITLE, SCREEN_MENU, SCREEN_PLAY, SCREEN_RESULTS, SCREEN_OPTIONS } Screen;
+typedef enum { SCREEN_BOOT, SCREEN_TITLE, SCREEN_MENU, SCREEN_PLAY, SCREEN_RESULTS, SCREEN_OPTIONS, SCREEN_INITIALS } Screen;
 
 Screen title_run(void);
 Screen menu_run(void);
 Screen play_run(void);
 Screen results_run(void);
 Screen options_run(void);
+Screen initials_run(void);
 
 extern Screen current_screen;
 
@@ -68,12 +69,21 @@ typedef struct {
     u16 percent;
     u16 stars;
     bool failed;
+    bool new_record;            // superó el récord (y la partida podía guardarlo)
 } Result;
 
 extern Result result;
 
 extern const char *const instrument_names[NUM_INSTRUMENTS];
 extern const char *const difficulty_names[NUM_DIFFICULTIES];
+
+// --- Récords (records.c) -------------------------------------------------------------------------
+
+void records_init(void);
+bool record_get(u16 song, u16 instrument, u16 difficulty, u32 *score, char *initials, u16 *stars);
+bool record_beats(u16 song, u16 instrument, u16 difficulty, u32 score);
+void record_save(u16 song, u16 instrument, u16 difficulty, u32 score, const char *initials, u16 stars);
+extern char last_initials[3];
 
 // --- Control (main.c) ----------------------------------------------------------------------------
 

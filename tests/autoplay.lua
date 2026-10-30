@@ -11,7 +11,9 @@
 --   GENBAND_MODE   perfecto (acierta todo), nada (no toca: debe perder), mitad (falla una de cada dos),
 --                  sinfallo (no toca, con SIN FALLO: debe llegar al final), aire (acierta todo y además,
 --                  cada 2 segundos, aprieta un carril sin nota: golpes al aire), practica (acierta todo
---                  y, cuando la práctica se repitió dos veces, sale al menú desde la pausa)
+--                  y, cuando la práctica se repitió dos veces, sale al menú desde la pausa), record (acierta
+--                  todo y escribe las iniciales BOT), leer_record (no juega: lee la tabla de récords al
+--                  llegar al menú, para ver que sobrevivió a apagar la consola)
 
 local sym_path = os.getenv("GENBAND_SYM")
 local out = os.getenv("GENBAND_OUT")
@@ -23,7 +25,7 @@ local opts = {}
 for k, v in (os.getenv("GENBAND_OPTS") or ""):gmatch("(%w+)=(%d+)") do opts[k] = tonumber(v) end
 local OPTION_ORDER = { "espejo", "velocidad", "caida", "practica", "inicio", "efecto" }
 
-local SCREEN_TITLE, SCREEN_MENU, SCREEN_PLAY, SCREEN_RESULTS, SCREEN_OPTIONS = 1, 2, 3, 4, 5 -- (0: arrancando)
+local SCREEN_TITLE, SCREEN_MENU, SCREEN_PLAY, SCREEN_RESULTS, SCREEN_OPTIONS, SCREEN_INITIALS = 1, 2, 3, 4, 5, 6 -- (0: arrancando)
 local GEM_SLOTS, GEM_SIZE = 64, 8
 local SUSTAIN = 0x40
 local TIMEOUT = 60 * 60 * 8 -- cuadros: ninguna canción dura tanto
@@ -174,6 +176,23 @@ local function play()
     end
 end
 
+-- El récord de la canción elegida en la tabla de la RAM (records.c): puntaje e iniciales, o nil
+local REC_SIZE_RAM = 12 -- sizeof(Record) en el 68000: id(2) clave(1) relleno(1) puntaje(4) iniciales(3) estrellas(1)
+local function find_record()
+    local hash = nil
+    -- El hash de la canción: Song.hash de song_list[GENBAND_SONG]
+    local song = mem:read_u32(sym.song_list + want_song * 4) & 0xFFFFFF
+    hash = mem:read_u16(song + 4 * 3 + 2 * 3)
+    for i = 0, 249 do
+        local b = sym.rec_table + i * REC_SIZE_RAM
+        if mem:read_u8(b + 2) == want_instr * 4 + want_diff and mem:read_u16(b) == hash then
+            local ini = string.char(mem:read_u8(b + 8), mem:read_u8(b + 9), mem:read_u8(b + 10))
+            return mem:read_u32(b + 4), ini
+        end
+    end
+    return nil
+end
+
 local function write_result()
     local r = sym.result
     local f = io.open(out .. "/resultado.txt", "w")
@@ -181,7 +200,7 @@ local function write_result()
     f:write(string.format("puntaje=%d\nperfecto=%d\nnotas=%d\ntotal=%d\ncombo_max=%d\nprecision=%d\nestrellas=%d\nfallo=%d\n",
         mem:read_u32(r), mem:read_u32(r + 4), mem:read_u16(r + 8), mem:read_u16(r + 10), mem:read_u16(r + 12),
         mem:read_u16(r + 14), mem:read_u16(r + 16), mem:read_u8(r + 18)))
-    f:write(string.format("cuadros=%d\n", frame))
+    f:write(string.format("cuadros=%d\nnuevo_record=%d\n", frame, mem:read_u8(r + 19)))
     f:close()
 end
 
@@ -214,6 +233,17 @@ emu.register_frame_done(function()
             state = "al_menu"
         end
     elseif state == "al_menu" then
+        if s == SCREEN_MENU and mode == "leer_record" then
+            local score, ini = find_record()
+            local f = io.open(out .. "/resultado.txt", "w")
+            f:write(string.format("modo=leer_record\nrecord=%d\niniciales=%s\npuntaje=0\nnotas=0\ntotal=0\ncombo_max=0\nestrellas=0\nfallo=0\n",
+                score or 0, ini or "---"))
+            f:close()
+            snapshot("menu con record")
+            state = "fin"
+            wait = 3
+            return
+        end
         if s == SCREEN_MENU then
             state = "menu"
             wait = 30
@@ -285,10 +315,36 @@ emu.register_frame_done(function()
     elseif state == "resultados" then
         snapshot("resultados")
         write_result()
+        if mode == "record" then
+            -- Iniciales: de las que traiga (AAA la primera vez) a BOT
+            tap(field.start)
+            table.insert(queue, { screen = SCREEN_INITIALS })
+            for _ = 1, 1 do tap(field.up) end
+            tap(field.right)
+            for _ = 1, 14 do tap(field.up) end
+            tap(field.right)
+            for _ = 1, 19 do tap(field.up) end
+            tap(field.start)
+            table.insert(queue, { screen = SCREEN_MENU })
+            state = "iniciales"
+            return
+        end
         note("fin (notas falladas a propósito: " .. missed_on_purpose .. ", golpes al aire: " .. (air_hits or 0) .. ")")
         state = "fin"
         wait = 3
         return
+    elseif state == "iniciales" then
+        if #queue == 0 then
+            local score, ini = find_record()
+            local f = io.open(out .. "/resultado.txt", "a")
+            f:write(string.format("record=%d\niniciales=%s\n", score or 0, ini or "---"))
+            f:close()
+            snapshot("menu con record")
+            note("récord guardado: " .. (score or 0) .. " " .. (ini or "---"))
+            state = "fin"
+            wait = 3
+            return
+        end
     elseif state == "fin" then
         manager.machine:exit()
         return

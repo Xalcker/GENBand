@@ -76,9 +76,35 @@ static void draw_value(u16 i)
     }
 }
 
+// El récord de la canción, el instrumento y la dificultad elegidos: "0029920 ABC *****" o "---"
+static void draw_record(void)
+{
+    const u16 y = item_y[ITEM_FAIL] + 2;
+    u32 score;
+    char ini[3];
+    u16 stars;
+    char text[32];
+    VDP_clearTextLineBG(BG_A, y);
+    draw_text(BG_A, "RECORD", LABEL_X, y, PAL1);
+    if (!record_get(sel.song, sel.instrument, sel.difficulty, &score, ini, &stars))
+    {
+        draw_text(BG_A, "---", VALUE_X, y, PAL1);
+        return;
+    }
+    uintToStr(score, text, 7);
+    const u16 n = strlen(text);
+    text[n] = ' ';
+    memcpy(text + n + 1, ini, 3);
+    text[n + 4] = ' ';
+    for (u16 i = 0; i < 5; i++) text[n + 5 + i] = i < stars ? '*' : ' ';
+    text[n + 10] = 0;
+    draw_text(BG_A, text, VALUE_X, y, PAL0);
+}
+
 static void draw_all(void)
 {
     for (u16 i = 0; i < ITEM_COUNT; i++) draw_value(i);
+    draw_record();
     // Cuántas notas tiene el chart elegido
     VDP_clearTextLineBG(BG_A, 22);
     char text[24] = "NOTAS: ";
