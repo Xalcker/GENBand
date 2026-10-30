@@ -42,6 +42,7 @@ static void draw_value(u16 i)
     switch (i)
     {
         case ITEM_SONG:
+            VDP_clearTextLineBG(BG_A, y + 1);   // el título anterior puede ser más largo
             draw_text(BG_A, song()->title, LABEL_X, y + 1, pal);
             VDP_clearTextLineBG(BG_A, y + 2);
             draw_text(BG_A, song()->game, LABEL_X, y + 2, PAL1);
