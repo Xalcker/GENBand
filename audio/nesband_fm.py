@@ -16,7 +16,8 @@ Uso (desde la raiz del repositorio):
     uv run python audio/nesband_fm.py            todas las de audio/nesband/
     uv run python audio/nesband_fm.py luna       solo esa
 
-Deja audio/<nombre>.vgm; despues se importa con genband import-song (ver el README).
+Deja audio/<nombre>.vgm; despues se importa con genband import-song (ver el README). La musica del titulo
+(audio/nesband/titulo.txt) tambien sale de aqui, pero en bucle y sin importarla: la convierte genband build-audio.
 """
 
 from __future__ import annotations
@@ -98,7 +99,7 @@ def leer(ruta: Path) -> dict:
             "canales": canales}
 
 
-def convertir(nombre: str) -> None:
+def convertir(nombre: str, bucle: bool = False) -> None:
     datos = leer(AQUI / "nesband" / f"{nombre}.txt")
     instrumentos = {}
     for ins, volumen in datos["instrumentos"].items():
@@ -129,10 +130,10 @@ def convertir(nombre: str) -> None:
         if cuadro not in unicos or prioridad[ins] < prioridad[unicos[cuadro]]:
             unicos[cuadro] = ins
     tocar_bateria(linea, cancion, sorted(set(bombos)), sorted(unicos.items()))
-    escribir_linea(linea, cancion, datos["total"], AQUI / f"{nombre}.vgm")
+    escribir_linea(linea, cancion, datos["total"], AQUI / f"{nombre}.vgm", bucle)
 
 
 if __name__ == "__main__":
     nombres = sys.argv[1:] or sorted(p.stem for p in (AQUI / "nesband").glob("*.txt"))
     for n in nombres:
-        convertir(n)
+        convertir(n, bucle=n == "titulo")

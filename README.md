@@ -191,7 +191,8 @@ uv run genband import-song audio/luna.vgm --name luna --guitarra fm1 --teclado f
 
 *Cumbia del Cartucho* necesita `--beat-frames 36` (el estimador le adivina el doble de tempo).
 
-La música del título es `audio/titulo.py`; `uv run genband build-audio` la convierte a `src/titulo_music.c`.
+La música del título es la de NESBand (`audio/nesband/titulo.txt`): `audio/titulo.py` la pasa a FM con
+`nesband_fm.py`, en bucle, y `uv run genband build-audio` la convierte a `src/titulo_music.c`.
 
 ## Pruebas
 
