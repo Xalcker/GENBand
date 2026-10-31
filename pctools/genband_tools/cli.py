@@ -362,6 +362,29 @@ def cmd_reimport(args: argparse.Namespace) -> None:
         import_song(opts)
 
 
+def cmd_export_notes(args: argparse.Namespace) -> None:
+    """Las notas de un VGM en el formato de bandcore.notes, para arreglarlas en otra consola: los canales de
+    guitarra, teclado y bajo (los que elegiría import-song, o los que se pidan) y la batería con sus papeles."""
+    from bandcore import notes as bnotes
+
+    opts = {"name": "export", "source": str(Path(args.source).resolve())}
+    for key in ("title", "game", "duration", "guitarra", "teclado", "bajo", DRUMS):
+        if getattr(args, key, None):
+            opts[key] = getattr(args, key)
+    sd = load_song(opts)
+    channels = {
+        slot: [[n.frame, n.duration, n.pitch, bnotes.DEFAULT_VOLUME] for n in sd.channel_notes(sd.assign.get(inst, []))]
+        for slot, inst in (("Square1", "guitarra"), ("Square2", "teclado"), ("Triangle", "bajo"))
+    }
+    assignment, _ = drum_assignment(sd)
+    hits = [[h.frame, h.role, h.cymbal] for h in drum_hits(sd.notes, sd.drums, assignment)] if assignment else []
+    data = bnotes.make(sd.title, sd.game, sd.stream_frames, channels, hits)
+    bnotes.write(data, Path(args.out))
+    used = ", ".join(f"{inst} {'+'.join(vgm.CHANNEL_NAMES[c] for c in sd.assign.get(inst, []))}" for inst, _ in INSTRUMENTS)
+    print(f"{args.out}: {sd.title} ({sd.game}), {sd.stream_frames / 60:.1f} s; {used}; "
+          f"batería {'+'.join(vgm.CHANNEL_NAMES[c] for c in sd.drums)} ({len(hits)} golpes)")
+
+
 def cmd_channels(args: argparse.Namespace) -> None:
     data = vgm.read_vgm(Path(args.source))
     frames = int(args.duration * 60) if args.duration else None
@@ -551,6 +574,17 @@ def main(argv: list[str] | None = None) -> None:
     p = sub.add_parser("reimport", help="vuelve a importar las canciones con sus mismas opciones")
     p.add_argument("names", nargs="*")
     p.set_defaults(func=cmd_reimport)
+
+    p = sub.add_parser("export-notes", help="saca las notas de un VGM a JSON (bandcore.notes) para arreglarlas en otra consola")
+    p.add_argument("source")
+    p.add_argument("--out", required=True)
+    p.add_argument("--title")
+    p.add_argument("--game")
+    p.add_argument("--duration", type=int, help="segundos que se graban (si el VGM tiene bucle)")
+    for inst, _ in INSTRUMENTS:
+        p.add_argument(f"--{inst}", help=f"canal(es) del {inst}: fm1..fm6, psg1..psg3")
+    p.add_argument(f"--{DRUMS}", help="canal(es) de la batería")
+    p.set_defaults(func=cmd_export_notes)
 
     p = sub.add_parser("channels", help="muestra las notas de cada canal de un VGM")
     p.add_argument("source")
