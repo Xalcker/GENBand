@@ -23,6 +23,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse
 
+from bandcore import editor as bandeditor
+
 from . import cli, vgm
 from .chart import DIFFICULTIES, ChartNote, chart_size
 from .chartedit import (
@@ -35,10 +37,56 @@ from .chartedit import (
 )
 from .drums import ROLE_LABELS, ROLE_LANE, ROLES, check_assignment, drum_groups, load_drums, save_drums
 
-HTML_PATH = Path(__file__).with_name("editor.html")
-HOME_PATH = Path(__file__).with_name("home.html")  # la página sin canción abierta
+# Las páginas (editor.html, home.html y el menú Archivo) son las de bandcore, compartidas con NESBand, GBBand y
+# NGBand; aquí van el perfil de la Genesis y su reproductor
+HTML_PATH = bandeditor.EDITOR_HTML
+HOME_PATH = bandeditor.HOME_HTML  # la página sin canción abierta
 GENPLAYER_PATH = Path(__file__).with_name("genplayer.js")  # el YM2612 y el PSG que tocan la canción
-MENU_PATH = Path(__file__).with_name("menu.html")  # el menú Archivo, compartido por las dos
+
+PROFILE = {
+    "game": "GENBand",
+    "cli": "genband",
+    "pads": ["←/X", "↓/Y", "→/Z", "B", "C"],
+    "channels": [
+        {"id": "fm1", "label": "FM 1", "color": "#58d0ff", "discrete": False},
+        {"id": "fm2", "label": "FM 2", "color": "#b58cff", "discrete": False},
+        {"id": "fm3", "label": "FM 3", "color": "#6be88a", "discrete": False},
+        {"id": "fm4", "label": "FM 4", "color": "#4fb8e8", "discrete": False},
+        {"id": "fm5", "label": "FM 5", "color": "#c9a0ff", "discrete": False},
+        {"id": "fm6", "label": "FM 6", "color": "#ff7a9c", "discrete": False},
+        {"id": "psg1", "label": "PSG 1", "color": "#e8e070", "discrete": False},
+        {"id": "psg2", "label": "PSG 2", "color": "#d0c860", "discrete": False},
+        {"id": "psg3", "label": "PSG 3", "color": "#b8b050", "discrete": False},
+        {"id": "ruido", "label": "Ruido", "color": "#ffb45e", "discrete": True, "pitchLabel": "tipo"},
+        {"id": "dac", "label": "DAC", "color": "#ff6b5e", "discrete": True, "pitchLabel": "sample"},
+    ],
+    "drumInstrument": True,
+    "exportLabel": "Exportar song.c",
+    "exportTitle": "Guarda y vuelve a importar la canción: su song.c sale con los charts editados",
+    "playerTitle": "Toca la canción con el YM2612 y el PSG emulados",
+    "import": {
+        "label": "VGM a importar (de songs_src/ o audio/)",
+        "placeholder": "songs_src/juego/cancion.vgz",
+        "hint": "Importar genera la música, los charts y la ficha en <code>src/songs/&lt;identificador&gt;/</code> "
+                "(como <code>genband import-song</code>). Los canales de cada instrumento salen de la sugerencia "
+                "automática: para elegirlos, usa la línea de comandos.",
+        "status": "Importando…",
+        "tracks": False,
+        "durationLabel": "Segundos a grabar (si tiene bucle)",
+        "durationPlaceholder": "120",
+    },
+}
+# genplayer.js toca el flujo por cuadro de la canción (en base64) con los samples del DAC
+_PLAYER_ADAPTER = """
+window.BandPlayer = {
+  FPS: GenPlayer.FPS,
+  render(player, data, opts) {
+    const bytes = (b64) => Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+    const dac = player.dac.map((d) => ({ data: bytes(d.data), rate: d.rate }));
+    return GenPlayer.render(bytes(player.stream), player.frames, { ...opts, dac });
+  },
+};
+"""
 
 SOURCE_SUFFIXES = (".vgm", ".vgz")
 
@@ -143,12 +191,9 @@ def export_song(sd: cli.SongData, charts: dict[str, list[ChartNote]], assignment
 
 
 def render_page(payload: dict, template: Path = HTML_PATH) -> str:
-    data = json.dumps(payload, ensure_ascii=True, separators=(",", ":")).replace("</", "<\\/")
-    menu = MENU_PATH.read_text(encoding="utf-8")
-    page = template.read_text(encoding="utf-8")
-    if "__GENPLAYER__" in page:
-        page = page.replace("__GENPLAYER__", GENPLAYER_PATH.read_text(encoding="utf-8"), 1)
-    return page.replace("__MENU__", menu, 1).replace("__DATA__", data, 1)
+    """La página del editor de bandcore con el perfil de la Genesis."""
+    player = GENPLAYER_PATH.read_text(encoding="utf-8") + _PLAYER_ADAPTER
+    return bandeditor.render_page(payload, PROFILE, player, template)
 
 
 def player_payload(sd: cli.SongData) -> dict:
