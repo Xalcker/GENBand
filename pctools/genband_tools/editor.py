@@ -17,19 +17,16 @@ import contextlib
 import io
 import json
 import re
-import threading
-import webbrowser
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import ThreadingHTTPServer  # noqa: F401  (las pruebas arman el servidor con él)
 from pathlib import Path
-from urllib.parse import urlparse
 
 from bandcore import editor as bandeditor
+from bandcore.editor import server as bandserver
 
 from . import cli, vgm
 from .chart import DIFFICULTIES, ChartNote, chart_size
 from .chartedit import (
     EDITS_FILE,
-    chart_from_json,
     chart_problems,
     diff_charts,
     save_edits,
@@ -209,14 +206,6 @@ def player_payload(sd: cli.SongData) -> dict:
 # --- Menú Archivo: canciones disponibles, fuentes para importar y la canción abierta -----------
 
 
-class App:
-    """La canción abierta (o ninguna) del servidor. Un candado evita que dos acciones se pisen."""
-
-    def __init__(self, sd: cli.SongData | None = None):
-        self.sd = sd
-        self.lock = threading.RLock()
-
-
 def list_songs() -> list[dict]:
     songs = []
     for options in sorted(cli.SONGS_DIR.glob("*/import.json")):
@@ -250,17 +239,17 @@ def resolve_source(text: str) -> Path:
     return path
 
 
-def open_song(app: App, name: str) -> None:
+def load_named_song(name: str) -> cli.SongData:
     if not re.fullmatch(r"[a-z][a-z0-9_]*", name) or not (cli.SONGS_DIR / name / "import.json").exists():
         raise ValueError(f"no existe la canción {name}")
     try:
-        app.sd = load_song_source(name)
+        return load_song_source(name)
     except SystemExit as error:
         raise ValueError(str(error.code)) from None
 
 
-def import_new_song(app: App, body: dict) -> str:
-    """Importa una canción nueva (como `genband import-song`), la abre y devuelve lo que imprimió el importador."""
+def import_source(body: dict) -> tuple[cli.SongData, str]:
+    """Importa una canción nueva (como `genband import-song`): la canción ya cargada y lo que imprimió el importador."""
     name = str(body.get("name", "")).strip()
     if not re.fullmatch(r"[a-z][a-z0-9_]*", name):
         raise ValueError("el identificador son minúsculas, números y _ (empezando con letra)")
@@ -283,117 +272,92 @@ def import_new_song(app: App, body: dict) -> str:
         raise ValueError(str(error.code)) from None
     except (RuntimeError, FileNotFoundError) as error:
         raise ValueError(str(error)) from None
-    open_song(app, name)
-    return log.getvalue()
+    return load_named_song(name), log.getvalue()
 
 
-class Handler(BaseHTTPRequestHandler):
-    app: App  # lo fija serve()
+# --- Servidor: el de bandcore, con lo propio de la Genesis -------------------------------------------------
 
-    def log_message(self, format, *args):  # sin ruido en la terminal
-        pass
+class Game(bandserver.EditorGame):
+    profile = PROFILE
 
-    def _send(self, status: int, body: bytes, content_type: str) -> None:
-        self.send_response(status)
-        self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
-        self.end_headers()
-        self.wfile.write(body)
+    def player_js(self) -> str:
+        return GENPLAYER_PATH.read_text(encoding="utf-8") + _PLAYER_ADAPTER
 
-    def _json(self, status: int, data: dict) -> None:
-        self._send(status, json.dumps(data).encode("utf-8"), "application/json")
+    def open(self, name: str) -> cli.SongData:
+        return load_named_song(name)
 
-    def do_GET(self) -> None:
-        url = urlparse(self.path)
-        try:
-            with self.app.lock:
-                if url.path == "/":
-                    if self.app.sd is None:
-                        page = render_page({"home": True}, HOME_PATH)
-                    else:
-                        page = render_page({**build_payload(self.app.sd), "editable": True, "player": True})
-                    self._send(200, page.encode("utf-8"), "text/html; charset=utf-8")
-                elif url.path == "/api/player":
-                    if self.app.sd is None:
-                        raise ValueError("no hay canción abierta")
-                    self._json(200, player_payload(self.app.sd))
-                elif url.path == "/api/songs":
-                    self._json(200, {"songs": list_songs()})
-                elif url.path == "/api/sources":
-                    self._json(200, {"sources": list_sources()})
-                else:
-                    self._send(404, b"no encontrado", "text/plain; charset=utf-8")
-        except (ValueError, KeyError) as error:
-            self._json(400, {"error": str(error)})
+    def payload(self, sd: cli.SongData) -> dict:
+        return build_payload(sd)
 
-    def do_POST(self) -> None:
-        # Solo la propia página: otro origen (una web cualquiera) no puede escribir en el proyecto
-        if self.headers.get("Origin") not in (None, f"http://{self.headers.get('Host')}"):
-            self._json(403, {"error": "origen no permitido"})
-            return
-        app = self.app
-        try:
-            body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
-            with app.lock:
-                if self.path == "/api/open":
-                    open_song(app, str(body.get("name", "")))
-                    self._json(200, {"message": f"abierta {app.sd.name}"})
-                elif self.path == "/api/close":
-                    app.sd = None
-                    self._json(200, {"message": "cerrada"})
-                elif self.path == "/api/import":
-                    self._json(200, {"message": import_new_song(app, body)})
-                elif self.path in ("/api/validate", "/api/save", "/api/export", "/api/drums"):
-                    sd = app.sd
-                    if sd is None or body.get("song") != sd.name:
-                        raise ValueError("la canción de esta página ya no es la abierta: recarga la página")
-                    if self.path == "/api/validate":
-                        self._json(200, {"problems": problems_for(body["key"], chart_from_json(body["chart"]))})
-                    elif self.path == "/api/drums":
-                        # Otra asignación: los charts de batería se rehacen (con las ediciones ya guardadas encima)
-                        check_assignment(body["assignment"])
-                        auto = cli.auto_charts(sd, body["assignment"])
-                        charts, warnings = cli.edited_charts(sd, auto)
-                        drums = lambda d: {k: v for k, v in d.items() if k.startswith(cli.DRUMS + "/")}  # noqa: E731
-                        self._json(200, {
-                            "charts": {k: chart_json(c) for k, c in drums(charts).items()},
-                            "auto": {k: chart_json(c) for k, c in drums(auto).items()},
-                            "problems": {k: problems_for(k, c) for k, c in drums(charts).items()},
-                            "warnings": warnings,
-                        })
-                    else:
-                        charts = {key: chart_from_json(items) for key, items in body["charts"].items()}
-                        assignment = body.get("drums")
-                        if self.path == "/api/save":
-                            edits = save_edits_from_page(sd, charts, assignment)
-                            count = sum(len(ops) for ops in edits.values())
-                            self._json(200, {"message": f"guardado ({count} ediciones)"})
-                        else:
-                            self._json(200, {"message": export_song(sd, charts, assignment)})
-                else:
-                    self._json(404, {"error": "no encontrado"})
-        except (ValueError, KeyError, TypeError) as error:
-            self._json(400, {"error": str(error)})
+    def player(self, sd: cli.SongData) -> dict:
+        return player_payload(sd)
+
+    def problems(self, key: str, chart: list[ChartNote]) -> list[dict]:
+        return problems_for(key, chart)
+
+    def drums(self, sd: cli.SongData, assignment: dict) -> dict:
+        # Otra asignación: los charts de batería se rehacen (con las ediciones ya guardadas encima)
+        check_assignment(assignment)
+        auto = cli.auto_charts(sd, assignment)
+        charts, warnings = cli.edited_charts(sd, auto)
+        drums = lambda d: {k: v for k, v in d.items() if k.startswith(cli.DRUMS + "/")}  # noqa: E731
+        return {
+            "charts": {k: chart_json(c) for k, c in drums(charts).items()},
+            "auto": {k: chart_json(c) for k, c in drums(auto).items()},
+            "problems": {k: problems_for(k, c) for k, c in drums(charts).items()},
+            "warnings": warnings,
+        }
+
+    def save(self, sd: cli.SongData, charts: dict, assignment: dict | None) -> dict:
+        return save_edits_from_page(sd, charts, assignment)
+
+    def export(self, sd: cli.SongData, charts: dict, assignment: dict | None) -> tuple[str, cli.SongData]:
+        return export_song(sd, charts, assignment), sd
+
+    def songs(self) -> list[dict]:
+        return list_songs()
+
+    def sources(self) -> list[dict]:
+        return list_sources()
+
+    def import_song(self, body: dict) -> tuple[cli.SongData, str]:
+        return import_source(body)
+
+
+GAME = Game()
+Handler = bandserver.Handler
+
+
+class App(bandserver.App):
+    """La canción abierta (o ninguna) del servidor; `sd` es la canción (`song` en bandcore)."""
+
+    def __init__(self, sd: cli.SongData | None = None):
+        super().__init__(GAME, sd)
+
+    @property
+    def sd(self) -> cli.SongData | None:
+        return self.song
+
+    @sd.setter
+    def sd(self, value: cli.SongData | None) -> None:
+        self.song = value
+
+
+def open_song(app: App, name: str) -> None:
+    app.song = GAME.open(name)
+
+
+def import_new_song(app: App, body: dict) -> str:
+    """Importa una canción nueva (como `genband import-song`), la abre y devuelve lo que imprimió el importador."""
+    app.song, log = GAME.import_song(body)
+    return log
 
 
 def write_html(name: str, path: Path) -> None:
     """Una página de solo lectura (sin servidor) con la canción `name`."""
-    path.write_text(render_page(build_payload(load_song_source(name))), encoding="utf-8")
+    path.write_text(render_page(build_payload(load_song_source(name))), encoding="utf-8", newline="\n")
     print(f"{path}: página de solo lectura de {name}")
 
 
 def serve(name: str | None, port: int, open_browser: bool) -> None:
-    app = App(load_song_source(name) if name else None)
-    Bound = type("Bound", (Handler,), {"app": app})
-    server = ThreadingHTTPServer(("127.0.0.1", port), Bound)
-    url = f"http://127.0.0.1:{server.server_address[1]}/"
-    print(f"Editor de charts{f' de {name!r}' if name else ''}: {url}  (Ctrl+C para cerrar)")
-    if open_browser:
-        threading.Timer(0.3, webbrowser.open, args=(url,)).start()
-    try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        print()
-    finally:
-        server.server_close()
+    bandserver.serve(App(load_song_source(name) if name else None), port, open_browser)
