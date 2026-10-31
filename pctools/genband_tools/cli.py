@@ -311,7 +311,8 @@ def write_song(sd: SongData, charts: dict[str, list[ChartNote]]) -> list[str]:
     )
     sd.folder.mkdir(parents=True, exist_ok=True)
     (sd.folder / "song.c").write_text("\n".join(out), encoding="utf-8", newline="\n")
-    (sd.folder / "import.json").write_text(json.dumps(sd.opts, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    (sd.folder / "import.json").write_text(json.dumps(sd.opts, indent=2, ensure_ascii=False) + "\n", encoding="utf-8",
+                                           newline="\n")  # LF también en Windows (va en git)
     return report
 
 
