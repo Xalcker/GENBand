@@ -27,6 +27,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from bandcore import vgm as core
+from bandcore.chart import Note  # noqa: F401  (la misma en los cuatro juegos)
 from bandcore.vgm import frame_of, unrolled_writes  # noqa: F401  (las usan cli.py y las pruebas como vgm.frame_of)
 
 YM_CLOCK = 7670453  # NTSC
@@ -299,15 +300,6 @@ def _wait(out: bytearray, frames: int) -> None:
 
 
 # --- Notas de cada canal ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class Note:
-    frame: int  # cuadro desde que empieza la canción
-    pitch: int  # número MIDI (solo importa para comparar alturas)
-    duration: int
-    extra: int | None = None  # otra altura del mismo gesto (un arpegio fusionado: un acorde "roto"); ver merge_attacks
-    instrument: str | None = None  # qué sonido es (en el ruido, el tipo de ruido: parte de lo que identifica un golpe)
 
 
 def fm_pitch(block: int, fnum: int) -> float | None:
