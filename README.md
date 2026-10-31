@@ -249,6 +249,22 @@ Hz) y en el flujo cada golpe queda como "toca el sample n". En el juego los toca
 Z80. Los golpes del DAC son el canal `dac` (un solo canal: un golpe corta al anterior, como en el juego
 original). Los VGM que mandan el DAC con streams (comandos `$9x`) aún no se leen.
 
+### Arreglos de otras consolas (NES, Game Boy)
+
+Una canción de NES o de Game Boy se puede tocar en la Genesis con sonidos FM. GBBand saca sus notas (de un NSF, un
+VGM de Game Boy o un GBS) y `audio/arreglo_fm.py` las arregla: pulso 1, pulso 2 y triángulo a FM 1, 2 y 3 (guitarra,
+teclado y bajo), y la batería al bombo del FM 6 y al ruido del PSG.
+
+```bash
+cd ../GBBand && uv run gbband export-notes "songs_src/Juego.nsf" --track 2 --out ../GENBand/build/notas.json && cd -
+uv run python audio/arreglo_fm.py build/notas.json --nombre juego_area1 --importar              # timbre A
+uv run python audio/arreglo_fm.py build/notas.json --nombre juego_area1 --timbre todos --importar
+```
+
+Hay dos timbres y cada uno le queda mejor a distintas canciones: **A** (guitarra distorsionada, piano y bajo, más
+"banda") y **B** (sierra, sonido pulsado y bajo, más cerca del pulso del NES). Con `--timbre todos` salen los dos (el B
+como `<nombre>_b`) para compararlos en el editor. El VGM queda en `songs_src/arreglos/`, que no va a git.
+
 ### Editor de charts
 
 ```bash
