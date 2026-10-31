@@ -3,6 +3,16 @@ revision = 3
 requires-python = ">=3.11"
 
 [[package]]
+name = "bandcore"
+version = "0.1.0"
+source = { editable = "../bandcore" }
+
+[package.metadata]
+
+[package.metadata.requires-dev]
+dev = [{ name = "pytest", specifier = ">=8" }]
+
+[[package]]
 name = "colorama"
 version = "0.4.6"
 source = { registry = "https://pypi.org/simple" }
@@ -15,6 +25,9 @@ wheels = [
 name = "genband-tools"
 version = "0.2.0"
 source = { editable = "." }
+dependencies = [
+    { name = "bandcore" },
+]
 
 [package.dev-dependencies]
 dev = [
@@ -22,6 +35,7 @@ dev = [
 ]
 
 [package.metadata]
+requires-dist = [{ name = "bandcore", editable = "../bandcore" }]
 
 [package.metadata.requires-dev]
 dev = [{ name = "pytest", specifier = ">=8" }]

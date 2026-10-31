@@ -5,7 +5,11 @@ description = "Herramientas de PC para GENBand: componer e importar canciones (V
 requires-python = ">=3.11"
 license = "GPL-2.0-or-later"
 license-files = ["LICENSE"]
-dependencies = []
+dependencies = ["bandcore"]
+
+# bandcore es un repo hermano (../bandcore): se clona junto a este
+[tool.uv.sources]
+bandcore = { path = "../bandcore", editable = true }
 
 [project.scripts]
 genband = "genband_tools.cli:main"

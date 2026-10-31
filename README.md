@@ -41,6 +41,8 @@ git clone --depth 1 --branch v2.11 https://github.com/Stephane-D/SGDK.git tools/
   que ya viene compilada (`lib/libmd.a`); no hace falta compilar nada de SGDK ni tener Java.
 - **BlastEm**: el emulador para jugar (el más preciso). **MAME**: el de las pruebas automáticas (tiene Lua).
 - **uv**: para las herramientas de Python (`uv sync` crea el venv).
+- **[bandcore](https://github.com/Xalcker/bandcore)**: el lector de VGM que comparten las versiones de Band.
+  Se clona junto a este repositorio (`../bandcore`); `uv sync` lo instala desde ahí.
 
 `tools/` está en `.gitignore`: cada máquina baja sus propias herramientas.
 

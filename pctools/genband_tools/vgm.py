@@ -2,7 +2,8 @@
 
 Aquí está todo lo que GENBand hace con un VGM:
 
-  - leerlo (`read_vgm`): la lista de escrituras con el instante (en muestras de 44.1 kHz) en que pasan;
+  - leerlo (`read_vgm`, encima del lector genérico de bandcore): la lista de escrituras con el instante (en
+    muestras de 44.1 kHz) en que pasan;
   - escribirlo (`VgmWriter`): lo usa audio/compose.py para las canciones originales;
   - convertirlo al flujo por cuadro que toca el juego (`frame_stream`, ver src/music.c);
   - sacar las notas de cada canal (`extract_notes`), de donde salen los charts.
@@ -20,11 +21,13 @@ streams de DAC ($9x) aún no se leen.
 
 from __future__ import annotations
 
-import gzip
 import math
 import struct
 from dataclasses import dataclass
 from pathlib import Path
+
+from bandcore import vgm as core
+from bandcore.vgm import frame_of, unrolled_writes  # noqa: F401  (las usan cli.py y las pruebas como vgm.frame_of)
 
 YM_CLOCK = 7670453  # NTSC
 PSG_CLOCK = 3579545
@@ -67,114 +70,36 @@ class Vgm:
     dac_samples: list[DacSample]
 
 
-# Comandos del formato VGM que no usamos, con cuántos bytes ocupan (incluido el comando)
-def _command_length(cmd: int, data: bytes, pos: int) -> int:
-    if cmd in (0x4F, 0x50) or 0x30 <= cmd <= 0x3F:
-        return 2
-    if 0x40 <= cmd <= 0x4E or 0x51 <= cmd <= 0x5F or 0xA0 <= cmd <= 0xBF:
-        return 3
-    if 0xC0 <= cmd <= 0xDF:
-        return 4
-    if 0xE0 <= cmd <= 0xFF:
-        return 5
-    if cmd == 0x68:
-        return 12
-    if cmd in (0x90, 0x91, 0x95):
-        return 5
-    if cmd == 0x92:
-        return 6
-    if cmd == 0x93:
-        return 11
-    if cmd == 0x94:
-        return 2
-    raise ValueError(f"comando VGM desconocido ${cmd:02X} en el byte {pos:#x}")
-
-
-def _gd3(data: bytes, offset: int) -> dict[str, str]:
-    if not offset or data[offset : offset + 4] != b"Gd3 ":
-        return {}
-    length = struct.unpack_from("<I", data, offset + 8)[0]
-    text = data[offset + 12 : offset + 12 + length].decode("utf-16-le", errors="replace")
-    fields = text.split("\0")
-    names = ["title", "title_jp", "game", "game_jp", "system", "system_jp", "author", "author_jp", "date", "ripper", "notes"]
-    return {name: value for name, value in zip(names, fields) if value}
-
-
 def read_vgm(path: Path) -> Vgm:
-    """Lee un .vgm o .vgz (el mismo formato comprimido con gzip)."""
-    raw = Path(path).read_bytes()
-    data = gzip.decompress(raw) if raw[:2] == b"\x1f\x8b" else raw
-    if data[:4] != b"Vgm ":
-        raise ValueError(f"{path}: no es un archivo VGM")
-    version = struct.unpack_from("<I", data, 0x08)[0]
-    gd3_offset = struct.unpack_from("<I", data, 0x14)[0]
-    total = struct.unpack_from("<I", data, 0x18)[0]
-    loop_offset = struct.unpack_from("<I", data, 0x1C)[0]
-    loop_samples = struct.unpack_from("<I", data, 0x20)[0]
-    ym_clock = struct.unpack_from("<I", data, 0x2C)[0] if version >= 0x110 else struct.unpack_from("<I", data, 0x10)[0]
-    if not ym_clock and not struct.unpack_from("<I", data, 0x0C)[0]:
+    """Lee un .vgm o .vgz (el mismo formato comprimido con gzip) con el lector de bandcore."""
+    raw = core.read_vgm(path)
+    ym_clock = raw.clocks.get("ym2612") or (raw.version < 0x110 and raw.clocks.get("ym2413"))
+    if not ym_clock and not raw.clocks.get("sn76489"):
         raise ValueError(f"{path}: no usa el YM2612 ni el PSG (no es música de Genesis)")
-    start = 0x40
-    if version >= 0x150:
-        rel = struct.unpack_from("<I", data, 0x34)[0]
-        if rel:
-            start = 0x34 + rel
-    loop_pos = 0x1C + loop_offset if loop_offset else None
-
     writes: list[Write] = []
-    sample = 0
-    loop_sample = None
-    bank = bytearray()  # los samples del DAC (bloques de datos de tipo 0)
+    for w in raw.writes:
+        if w.index:
+            continue
+        if w.chip == "sn76489" and w.port == 0:
+            writes.append(Write(w.sample, "psg", 0, w.value))
+        elif w.chip == "ym2612":
+            writes.append(Write(w.sample, "ym0" if w.port == 0 else "ym1", w.reg, w.value))
+    bank = b"".join(b.data for b in raw.blocks if b.type == 0x00)  # los samples del DAC
     runs: list[_DacRun] = []  # cada golpe del DAC: desde dónde del banco, cuántos bytes y en cuánto tiempo
     dac_pos = 0
-    pos = start
-    while pos < len(data):
-        if loop_pos is not None and pos == loop_pos:
-            loop_sample = sample
-        cmd = data[pos]
-        if cmd == 0x66:
-            break
-        if cmd == 0x50:
-            writes.append(Write(sample, "psg", 0, data[pos + 1]))
-            pos += 2
-        elif cmd in (0x52, 0x53):
-            writes.append(Write(sample, "ym0" if cmd == 0x52 else "ym1", data[pos + 1], data[pos + 2]))
-            pos += 3
-        elif cmd == 0x61:
-            sample += struct.unpack_from("<H", data, pos + 1)[0]
-            pos += 3
-        elif cmd == 0x62:
-            sample += 735
-            pos += 1
-        elif cmd == 0x63:
-            sample += 882
-            pos += 1
-        elif 0x70 <= cmd <= 0x7F:
-            sample += (cmd & 0x0F) + 1
-            pos += 1
-        elif 0x80 <= cmd <= 0x8F:  # un byte del banco al DAC y esperar n
+    for event in raw.dac:
+        if event.kind == "seek":  # saltar a un lugar del banco: empieza un golpe
+            dac_pos = event.offset
+            runs.append(_DacRun(event.sample, dac_pos))
+        else:  # un byte del banco al DAC
             if not runs:
-                runs.append(_DacRun(sample, dac_pos))
-            runs[-1].played(sample)
+                runs.append(_DacRun(event.sample, dac_pos))
+            runs[-1].played(event.sample)
             dac_pos += 1
-            sample += cmd & 0x0F
-            pos += 1
-        elif cmd == 0xE0:  # saltar a un lugar del banco: empieza un golpe
-            dac_pos = struct.unpack_from("<I", data, pos + 1)[0]
-            runs.append(_DacRun(sample, dac_pos))
-            pos += 5
-        elif cmd == 0x67:  # bloque de datos (samples del DAC)
-            size = struct.unpack_from("<I", data, pos + 3)[0] & 0x7FFFFFFF
-            if data[pos + 2] == 0x00:
-                bank += data[pos + 7 : pos + 7 + size]
-            pos += 7 + size
-        else:
-            pos += _command_length(cmd, data, pos)
-    tags = _gd3(data, 0x14 + gd3_offset if gd3_offset else 0)
-    samples, hits = _dac_samples(bytes(bank), runs)
+    samples, hits = _dac_samples(bank, runs)
     if hits:  # los golpes van entre las escrituras, en su instante (después de las de ese mismo instante)
         writes = sorted(writes + hits, key=lambda w: w.sample)
-    return Vgm(writes, total or sample, loop_sample, loop_samples, tags, samples)
+    return Vgm(writes, raw.total_samples, raw.loop_sample, raw.loop_samples, raw.tags, samples)
 
 
 # --- DAC: de los bytes que el VGM manda uno por uno, a samples que toca el driver ---------------------
@@ -267,26 +192,6 @@ def _resample(raw: bytes, source: float, target: int) -> bytes:
         b = raw[min(j + 1, len(raw) - 1)]
         out[i] = (round(a + (b - a) * (x - j)) - 128) & 0xFF
     return bytes(out)
-
-
-def frame_of(sample: int) -> int:
-    return (sample + SAMPLES_PER_FRAME // 2) // SAMPLES_PER_FRAME
-
-
-def unrolled_writes(vgm: Vgm, frames: int | None = None) -> list[tuple[int, Write]]:
-    """Las escrituras con su cuadro, repitiendo el bucle hasta llenar `frames` cuadros (si se pide).
-
-    Sin `frames` se toca una sola vez, hasta el final del archivo."""
-    out = [(frame_of(w.sample), w) for w in vgm.writes]
-    if frames is None:
-        return out
-    if vgm.loop_sample is not None and vgm.loop_samples:
-        loop = [w for w in vgm.writes if w.sample >= vgm.loop_sample]
-        offset = vgm.total_samples
-        while loop and frame_of(offset) < frames:
-            out += [(frame_of(w.sample - vgm.loop_sample + offset), w) for w in loop]
-            offset += vgm.total_samples - vgm.loop_sample
-    return [(f, w) for f, w in out if f < frames]
 
 
 # --- Flujo por cuadro (lo que toca src/music.c) -----------------------------------------------------
