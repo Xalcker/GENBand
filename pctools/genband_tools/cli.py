@@ -26,6 +26,8 @@ import zlib
 from dataclasses import dataclass
 from pathlib import Path
 
+from bandcore import testrun
+
 from . import vgm
 from .chart import (
     BLOCKED_PAIRS,
@@ -401,6 +403,13 @@ def cmd_channels(args: argparse.Namespace) -> None:
     print("sugerencia: " + " ".join(f"--{k} {','.join(vgm.CHANNEL_NAMES[c] for c in v)}" for k, v in guess.items()))
 
 
+def cmd_test(args: argparse.Namespace) -> int:
+    from . import testing
+    return testrun.main(args, root=testing.ROOT, cases=testing.build_cases(args), build=testrun.build_command(testing.ROOT),
+                        emulator=testing.emulator(window=not args.sin_ventana),
+                        build_hint="GENBand se compila con SGDK (build.sh); en Windows todavía no hay build.ps1")
+
+
 def cmd_list(args: argparse.Namespace) -> None:
     for song in sorted(SONGS_DIR.glob("*/song.c")):
         text = song.read_text(encoding="utf-8")
@@ -605,6 +614,10 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--png", help="carpeta donde dejar una vista previa del escenario (1 y 2 jugadores)")
     p.set_defaults(func=cmd_build_gfx)
 
+    p = sub.add_parser("test", help="compila y corre las pruebas en MAME (en ventana; igual en macOS y Windows)")
+    testrun.add_arguments(p)
+    p.set_defaults(func=cmd_test)
+
     p = sub.add_parser("build-font", help="convierte la fuente de NESBand (Bongo-8 Mono) a src/font_data.c")
     p.add_argument("source", nargs="?", default=str(ROOT.parent / "NESBand" / "src" / "font.s"))
     p.set_defaults(func=cmd_build_font)
@@ -613,7 +626,9 @@ def main(argv: list[str] | None = None) -> None:
     p.set_defaults(func=cmd_build_audio)
 
     args = parser.parse_args(argv)
-    args.func(args)
+    code = args.func(args)
+    if isinstance(code, int) and code:
+        sys.exit(code)
 
 
 if __name__ == "__main__":

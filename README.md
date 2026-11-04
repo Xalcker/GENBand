@@ -340,14 +340,19 @@ La música del título es la de NESBand (`audio/nesband/titulo.txt`): `audio/tit
 ## Pruebas
 
 ```bash
-tests/run_tests.sh
+uv run genband test                 # compila y corre todos los casos (macOS y Windows)
+uv run genband test --no-build -j 4 # con la ROM que ya está, 4 casos a la vez
+uv run genband test --rapida        # un subconjunto representativo
+uv run genband test --lista         # solo muestra los casos
+uv run pytest                       # pruebas de las herramientas de PC
 ```
 
-```bash
-uv run pytest
-```
+`tests/run_tests.sh` y `tests/run_tests.ps1` son envoltorios de ese mismo comando. Las fallas ya conocidas van en
+`tests/known_failures.txt` (hoy ninguna): no cambian el código de salida, una falla nueva sí. El corredor es el de
+`bandcore.testrun`, el mismo de los otros tres juegos. En Windows el corredor funciona, pero compilar GENBand
+(SGDK) todavía solo está probado en macOS: ahí corre con `--no-build` sobre una ROM ya compilada.
 
-`run_tests.sh` compila y juega cada caso en MAME, sin ventana y a toda velocidad, con un bot
+`genband test` compila y juega cada caso en MAME, en una ventana chica (nunca en pantalla completa; con `--sin-ventana` corre invisible, sin ninguna ventana) y a toda velocidad, con un bot
 (`tests/autoplay.lua`) que pasa el título, elige en el menú con el control como un jugador, toca leyendo
 las notas de la RAM y anota los resultados. Comprueba que el juego perfecto acierte todo con 5 estrellas,
 que sin tocar se pierda, que SIN FALLO llegue al final, que los golpes al aire rompan el combo, que el espejo y
@@ -355,8 +360,8 @@ las velocidades se puedan jugar perfecto, que la práctica se repita y que sus m
 guarde con sus iniciales y siga ahí al volver a encender, que la batería se pueda jugar perfecto, que con
 2 jugadores VS haya empate con el mismo chart y que gane el otro si uno pierde, que en Co-Op la banda haga
 todas las notas y siga si un jugador cae, que el audio suene y que no se pierdan cuadros. El bot toca con los dos controles. El bot llega a las opciones como un jugador (`GENBAND_OPTS`). Cada caso deja en
-`build/test-<nombre>/` las capturas, el audio (`audio.wav`) y el registro. `tests/run_tests.sh '*-nada'`
-corre solo los casos que coinciden; `--no-build` usa la ROM que ya está. Cada caso elige su canción por la
+`build/test-<nombre>/` las capturas, el audio (`audio.wav`) y el registro. `genband test '*-nada'`
+corre solo los casos que coinciden (comodines y comas); `--no-build` usa la ROM que ya está. Cada caso elige su canción por la
 carpeta (las importadas cambian el orden del menú), y si está importada Green Hill Zone de Sonic (`ghz`),
 también se prueba la batería con el DAC.
 
