@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "editor",
+      "runtimeExecutable": "uv",
+      "runtimeArgs": ["run", "--project", "pctools", "genband", "edit-chart", "tormenta", "--port", "8765", "--no-open"],
+      "port": 8765
+    }
+  ]
+}

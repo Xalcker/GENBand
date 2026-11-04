@@ -26,3 +26,6 @@ __pycache__/
 *.egg-info/
 .pytest_cache/
 .DS_Store
+
+# Claude Code: .claude/launch.json (editor de charts) sí va en git; los worktrees de sus sesiones no
+.claude/worktrees/
