@@ -26,7 +26,7 @@ import zlib
 from dataclasses import dataclass
 from pathlib import Path
 
-from bandcore import testrun
+from bandcore import sharedcharts, testrun
 
 from . import vgm
 from .chart import (
@@ -196,6 +196,9 @@ def load_song(opts: dict) -> SongData:
     frames = None if duration is None else int(duration * 60)
     writes = vgm.unrolled_writes(data, frames)
     music_frames = frames if frames is not None else vgm.frame_of(data.total_samples)
+    shared = sharedcharts.load(SONGS_DIR / name, LEAD_IN)
+    if shared is not None and duration is None:   # con el chart de NESBand, también su duración
+        music_frames = min(music_frames, shared.music_frames)
     music_frames = min(music_frames, MAX_FRAMES - LEAD_IN - 60)
     writes = [(f, w) for f, w in writes if f < music_frames]
 
@@ -211,6 +214,8 @@ def load_song(opts: dict) -> SongData:
     drums = parse_channels(opts.get(DRUMS)) or drum_channels(notes, used)
     onsets = [n.frame for ch, ns in notes.items() if ch in used or ch in vgm.PERCUSSION for n in ns]
     grid = estimate_beat(onsets, opts.get("beat_frames"))
+    if shared is not None:   # el chart de NESBand trae su rejilla de tiempos (las líneas de la autopista)
+        grid = BeatGrid(shared.frames_per_beat, shared.first_beat)
     return SongData(opts, name, title, game, stream, stream_frames, notes, assign, drums, grid, data.dac_samples)
 
 
@@ -228,7 +233,13 @@ def drum_assignment(sd: SongData, override: dict | None = None) -> tuple[dict | 
 
 
 def auto_charts(sd: SongData, assignment: dict | None = None) -> dict[str, list[ChartNote]]:
-    """Los charts que genera el importador, sin ediciones, por clave "instrumento/dificultad"."""
+    """Los charts que genera el importador, sin ediciones, por clave "instrumento/dificultad".
+
+    Si la canción tiene charts.json (el chart de NESBand, ver bandcore.sharedcharts), son esos tal cual, batería
+    incluida: así se toca lo mismo en las cuatro consolas. Si no, se generan desde las notas del VGM."""
+    shared = sharedcharts.load(sd.folder, LEAD_IN)
+    if shared is not None:
+        return dict(shared.charts)
     charts: dict[str, list[ChartNote]] = {}
     for inst, role in INSTRUMENTS:
         chs = sd.assign.get(inst)
@@ -285,7 +296,7 @@ def write_song(sd: SongData, charts: dict[str, list[ChartNote]]) -> list[str]:
             out.append(chart_to_c(label, chart))
             labels.append(label)
             counts.append(str(chart_buttons(chart)))
-        chs = sd.drums if inst == DRUMS else sd.assign[inst]
+        chs = sd.drums if inst == DRUMS else sd.assign.get(inst, [])
         charts_c.append("{ " + ", ".join(labels) + " }")
         buttons_c.append("{ " + ", ".join(counts) + " }")
         mask_c.append(f"0x{sum(1 << ch for ch in chs):04X}")
@@ -323,7 +334,7 @@ def import_song(opts: dict) -> None:
     sd = load_song(opts)
     sd.folder.mkdir(parents=True, exist_ok=True)
     assignment, suggested = drum_assignment(sd)
-    if suggested:
+    if suggested and not (sd.folder / sharedcharts.CHARTS_FILE).exists():
         save_drums(sd.folder, assignment)       # la sugerencia queda guardada, para corregirla a mano
     charts, warnings = edited_charts(sd, auto_charts(sd, assignment))
     report = write_song(sd, charts)
