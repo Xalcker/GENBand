@@ -51,7 +51,6 @@ WORK_DIR = ROOT / "build" / "songs"
 
 LEAD_IN = 128  # cuadros de autopista antes de que arranque la música (SONG_LEAD_IN en src/genband.h)
 TEXT_MAX = 26  # caracteres que caben en el menú
-DEFAULT_DURATION = 120  # segundos, si el VGM tiene bucle y no se dice cuánto grabar
 MAX_FRAMES = 65000  # el juego cuenta los cuadros en 16 bits
 
 # Instrumentos en el orden que usa el juego, con su papel en el generador de charts (ver chart.ROLES); la
@@ -191,9 +190,9 @@ def load_song(opts: dict) -> SongData:
     title = clean_text(opts.get("title") or data.tags.get("title") or name)
     game = clean_text(opts.get("game") or data.tags.get("game") or "")
 
+    # Sin --duration se toca una vuelta (con la introducción), aunque el VGM tenga bucle: así dura lo mismo que en
+    # NESBand, GBBand y NGBand. Para grabar más, se pide con --duration (queda en import.json)
     duration = opts.get("duration")
-    if duration is None and data.loop_sample is not None:
-        duration = DEFAULT_DURATION
     frames = None if duration is None else int(duration * 60)
     writes = vgm.unrolled_writes(data, frames)
     music_frames = frames if frames is not None else vgm.frame_of(data.total_samples)
